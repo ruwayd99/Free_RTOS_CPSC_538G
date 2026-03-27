@@ -72,9 +72,25 @@
     #define configUSE_EDF_SCHEDULING    0
 #endif
 
+#ifndef configEDF_TRACE_ENABLE
+    #define configEDF_TRACE_ENABLE    0
+#endif
+
 /* FreeRTOS CPSC_538G related configs*/
 #ifndef configUSE_SRP
     #define configUSE_SRP    0
+#endif
+
+#ifndef configMAX_SRP_RESOURCES
+    #define configMAX_SRP_RESOURCES    8
+#endif
+
+#ifndef configMAX_SRP_USERS_PER_RESOURCE
+    #define configMAX_SRP_USERS_PER_RESOURCE    16
+#endif
+
+#ifndef configSRP_STACK_SHARING
+    #define configSRP_STACK_SHARING    0
 #endif
 
 /* Define configTICK_TYPE_WIDTH_IN_BITS according to the

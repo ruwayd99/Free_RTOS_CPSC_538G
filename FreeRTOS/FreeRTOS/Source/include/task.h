@@ -99,6 +99,10 @@ struct tskTaskControlBlock; /* The old naming convention is used to prevent brea
 typedef struct tskTaskControlBlock         * TaskHandle_t;
 typedef const struct tskTaskControlBlock   * ConstTaskHandle_t;
 
+#if ( configUSE_SRP == 1 )
+    typedef void * SRPResourceHandle_t;
+#endif
+
 /*
  * Defines the prototype to which the application task hook function must
  * conform.
@@ -301,6 +305,7 @@ typedef enum
         void * const pvParameters,
         TickType_t xPeriod,
         TickType_t xRelativeDeadline,
+        TickType_t xWcetTicks,
         TaskHandle_t * const pxCreatedTask
     );
 #endif
@@ -314,6 +319,23 @@ typedef enum
      *                     (initialize it with xTaskGetTickCount() before
      *                     your task's main loop). */
     void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime );
+#endif
+
+#if ( configUSE_SRP == 1 )
+    SRPResourceHandle_t xSRPResourceCreate( UBaseType_t uxMaxUnits );
+
+    void vSRPResourceRegisterUser( SRPResourceHandle_t xResource,
+                                   UBaseType_t uxPreemptionLevel,
+                                   UBaseType_t uxUnitsNeeded,
+                                   TickType_t xCriticalSectionTicks );
+
+    BaseType_t xSRPResourceTake( SRPResourceHandle_t xResource,
+                                 UBaseType_t uxUnits );
+
+    void vSRPResourceGive( SRPResourceHandle_t xResource,
+                           UBaseType_t uxUnits );
+
+    UBaseType_t uxSRPGetSystemCeiling( void );
 #endif
 
 /**

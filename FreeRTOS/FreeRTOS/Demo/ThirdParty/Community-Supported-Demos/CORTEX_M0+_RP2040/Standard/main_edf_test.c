@@ -1,103 +1,226 @@
+#include <stdio.h>
+
 #include "FreeRTOS.h"
 #include "task.h"
-#include "pico/stdlib.h"      /* Pico SDK: GPIO, stdio */
+#include "pico/stdlib.h"
 
-/* Each task gets its own GPIO pin. When the task is running,
- * its pin is HIGH. When it's done (sleeping), its pin is LOW.
- * Connect LEDs or a logic analyzer to these pins to see the schedule. */
-#define LED_PIN_TASK_A  2
-#define LED_PIN_TASK_B  3
+#define PIN_TASK_LOW        10
+#define PIN_TASK_HIGH       11
+#define PIN_TASK_BG         12
+#define PIN_TASK_RUNTIME    13
 
-/* Task A: runs every 500ms, does ~100ms of work each time.
- * Deadline = period = 500ms (must finish before next period). */
-void vTaskA( void * pvParameters )
+static SRPResourceHandle_t xSharedResource = NULL;
+
+static UBaseType_t prvLevelFromDeadline( TickType_t xDeadline )
 {
-    /* Initialize the wake-time tracker to the current tick.
-     * vTaskDelayUntilNextPeriod uses this to calculate exact
-     * periodic wake-up times. */
-    TickType_t xLastWakeTime = xTaskGetTickCount();
+    return ( UBaseType_t ) ( portMAX_DELAY - xDeadline );
+}
 
-    for( ;; )
+static void prvBusyWorkTicks( TickType_t xDurationTicks )
+{
+    TickType_t xStart = xTaskGetTickCount();
+
+    while( ( xTaskGetTickCount() - xStart ) < xDurationTicks )
     {
-        /* Signal that Task A is running (turn on LED / set GPIO high). */
-        gpio_put( LED_PIN_TASK_A, 1 );
-
-        /* Simulate doing ~100ms of work by busy-waiting.
-         * In a real application, this would be actual computation
-         * (reading a sensor, processing data, etc.). */
-        TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 1000 ) )
-        {
-            /* Busy wait -- the task is "working." */
-        }
-
-        /* Signal that Task A is done with this period's work. */
-        gpio_put( LED_PIN_TASK_A, 0 );
-
-        /* Sleep until the next period. This also updates the deadline.
-         * The task will wake up at xLastWakeTime + period (500ms).
-         * While sleeping, other tasks can use the CPU. */
-        vTaskDelayUntilNextPeriod( &xLastWakeTime );
+        /* Busy work to generate deterministic runtime on analyzer traces. */
     }
 }
 
-/* Task B: runs every 1000ms, does ~200ms of work each time.
- * Deadline = period = 1000ms. */
-void vTaskB( void * pvParameters )
+static void vLowTask( void * pvParameters )
 {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
+    ( void ) pvParameters;
+    TickType_t xLastWake = xTaskGetTickCount();
 
     for( ;; )
     {
-        gpio_put( LED_PIN_TASK_B, 1 );
+        gpio_put( PIN_TASK_LOW, 1 );
 
-        TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 2000 ) )
+        while( xSRPResourceTake( xSharedResource, 1U ) != pdPASS )
         {
-            /* Busy wait. */
+            taskYIELD();
         }
 
-        gpio_put( LED_PIN_TASK_B, 0 );
+        prvBusyWorkTicks( pdMS_TO_TICKS( 1200 ) );
+        vSRPResourceGive( xSharedResource, 1U );
 
-        vTaskDelayUntilNextPeriod( &xLastWakeTime );
+        prvBusyWorkTicks( pdMS_TO_TICKS( 200 ) );
+
+        gpio_put( PIN_TASK_LOW, 0 );
+        vTaskDelayUntilNextPeriod( &xLastWake );
+    }
+}
+
+static void vHighTask( void * pvParameters )
+{
+    ( void ) pvParameters;
+    TickType_t xLastWake = xTaskGetTickCount();
+
+    for( ;; )
+    {
+        gpio_put( PIN_TASK_HIGH, 1 );
+
+        while( xSRPResourceTake( xSharedResource, 1U ) != pdPASS )
+        {
+            taskYIELD();
+        }
+
+        prvBusyWorkTicks( pdMS_TO_TICKS( 350 ) );
+        vSRPResourceGive( xSharedResource, 1U );
+
+        gpio_put( PIN_TASK_HIGH, 0 );
+        vTaskDelayUntilNextPeriod( &xLastWake );
+    }
+}
+
+static void vBackgroundTask( void * pvParameters )
+{
+    ( void ) pvParameters;
+    TickType_t xLastWake = xTaskGetTickCount();
+
+    for( ;; )
+    {
+        gpio_put( PIN_TASK_BG, 1 );
+        prvBusyWorkTicks( pdMS_TO_TICKS( 250 ) );
+        gpio_put( PIN_TASK_BG, 0 );
+        vTaskDelayUntilNextPeriod( &xLastWake );
+    }
+}
+
+static void vRuntimeAcceptedTask( void * pvParameters )
+{
+    ( void ) pvParameters;
+    TickType_t xLastWake = xTaskGetTickCount();
+
+    for( ;; )
+    {
+        gpio_put( PIN_TASK_RUNTIME, 1 );
+        prvBusyWorkTicks( pdMS_TO_TICKS( 250 ) );
+        gpio_put( PIN_TASK_RUNTIME, 0 );
+        vTaskDelayUntilNextPeriod( &xLastWake );
+    }
+}
+
+static void vRuntimeCreatorTask( void * pvParameters )
+{
+    BaseType_t xAccepted;
+    BaseType_t xRejected;
+
+    ( void ) pvParameters;
+
+    vTaskDelay( pdMS_TO_TICKS( 10000 ) );
+
+    xAccepted = xTaskCreateEDF( vRuntimeAcceptedTask,
+                                "RT_OK",
+                                256,
+                                NULL,
+                                pdMS_TO_TICKS( 4000 ),
+                                pdMS_TO_TICKS( 3000 ),
+                                pdMS_TO_TICKS( 350 ),
+                                NULL );
+
+    xRejected = xTaskCreateEDF( vRuntimeAcceptedTask,
+                                "RT_REJECT",
+                                256,
+                                NULL,
+                                pdMS_TO_TICKS( 2000 ),
+                                pdMS_TO_TICKS( 1500 ),
+                                pdMS_TO_TICKS( 1400 ),
+                                NULL );
+
+    printf( "[TEST][runtime] add_ok=%ld add_reject=%ld\r\n",
+            ( long ) xAccepted,
+            ( long ) xRejected );
+
+    for( ;; )
+    {
+        vTaskDelay( pdMS_TO_TICKS( 1000 ) );
     }
 }
 
 void main_edf_test( void )
 {
-    /* Initialize GPIO pins for LEDs. */
-    gpio_init( LED_PIN_TASK_A );
-    gpio_set_dir( LED_PIN_TASK_A, GPIO_OUT );
-    gpio_init( LED_PIN_TASK_B );
-    gpio_set_dir( LED_PIN_TASK_B, GPIO_OUT );
+    const TickType_t xLowPeriod = pdMS_TO_TICKS( 7000 );
+    const TickType_t xLowDeadline = pdMS_TO_TICKS( 5500 );
+    const TickType_t xLowWCET = pdMS_TO_TICKS( 1600 );
 
-    /* Create Task A: period=5000ms, deadline=5000ms.
-     * pdMS_TO_TICKS() converts milliseconds to ticks.
-     * With configTICK_RATE_HZ=1000, pdMS_TO_TICKS(5000) = 5000 ticks. */
-    xTaskCreateEDF( vTaskA,               /* Task function */
-                    "TaskA",              /* Name (for debugging) */
-                    256,                  /* Stack size in words */
-                    NULL,                 /* No parameters to pass */
-                    pdMS_TO_TICKS( 5000 ), /* Period: 5000ms */
-                    pdMS_TO_TICKS( 5000 ), /* Deadline: 5000ms (= period) */
-                    NULL );               /* Don't need the handle */
+    const TickType_t xHighPeriod = pdMS_TO_TICKS( 5000 );
+    const TickType_t xHighDeadline = pdMS_TO_TICKS( 2500 );
+    const TickType_t xHighWCET = pdMS_TO_TICKS( 700 );
 
-    /* Create Task B: period=1000ms, deadline=1000ms. */
-    xTaskCreateEDF( vTaskB,
-                    "TaskB",
-                    256,
-                    NULL,
-                    pdMS_TO_TICKS( 10000 ),
-                    pdMS_TO_TICKS( 10000 ),
-                    NULL );
+    const TickType_t xBgPeriod = pdMS_TO_TICKS( 6000 );
+    const TickType_t xBgDeadline = pdMS_TO_TICKS( 6000 );
+    const TickType_t xBgWCET = pdMS_TO_TICKS( 500 );
 
-    /* Start the scheduler. This function never returns.
-     * From this point on, FreeRTOS is in control. It will
-     * create the Idle task, start the tick timer, and begin
-     * running the task with the earliest deadline. */
+    gpio_init( PIN_TASK_LOW );
+    gpio_set_dir( PIN_TASK_LOW, GPIO_OUT );
+    gpio_init( PIN_TASK_HIGH );
+    gpio_set_dir( PIN_TASK_HIGH, GPIO_OUT );
+    gpio_init( PIN_TASK_BG );
+    gpio_set_dir( PIN_TASK_BG, GPIO_OUT );
+    gpio_init( PIN_TASK_RUNTIME );
+    gpio_set_dir( PIN_TASK_RUNTIME, GPIO_OUT );
+
+    xSharedResource = xSRPResourceCreate( 1U );
+    configASSERT( xSharedResource != NULL );
+
+    vSRPResourceRegisterUser( xSharedResource,
+                              prvLevelFromDeadline( xLowDeadline ),
+                              1U,
+                              pdMS_TO_TICKS( 1200 ) );
+
+    vSRPResourceRegisterUser( xSharedResource,
+                              prvLevelFromDeadline( xHighDeadline ),
+                              1U,
+                              pdMS_TO_TICKS( 350 ) );
+
+    printf( "[TEST][startup] low(T=%lu D=%lu C=%lu) high(T=%lu D=%lu C=%lu) bg(T=%lu D=%lu C=%lu)\r\n",
+            ( unsigned long ) xLowPeriod,
+            ( unsigned long ) xLowDeadline,
+            ( unsigned long ) xLowWCET,
+            ( unsigned long ) xHighPeriod,
+            ( unsigned long ) xHighDeadline,
+            ( unsigned long ) xHighWCET,
+            ( unsigned long ) xBgPeriod,
+            ( unsigned long ) xBgDeadline,
+            ( unsigned long ) xBgWCET );
+
+    configASSERT( xTaskCreateEDF( vLowTask,
+                                  "SRP_LOW",
+                                  256,
+                                  NULL,
+                                  xLowPeriod,
+                                  xLowDeadline,
+                                  xLowWCET,
+                                  NULL ) == pdPASS );
+
+    configASSERT( xTaskCreateEDF( vHighTask,
+                                  "SRP_HIGH",
+                                  256,
+                                  NULL,
+                                  xHighPeriod,
+                                  xHighDeadline,
+                                  xHighWCET,
+                                  NULL ) == pdPASS );
+
+    configASSERT( xTaskCreateEDF( vBackgroundTask,
+                                  "SRP_BG",
+                                  256,
+                                  NULL,
+                                  xBgPeriod,
+                                  xBgDeadline,
+                                  xBgWCET,
+                                  NULL ) == pdPASS );
+
+    configASSERT( xTaskCreate( vRuntimeCreatorTask,
+                               "RUNTIME_CREATE",
+                               256,
+                               NULL,
+                               tskIDLE_PRIORITY + 1U,
+                               NULL ) == pdPASS );
+
     vTaskStartScheduler();
 
-    /* We should never get here. If we do, it means the scheduler
-     * failed to start (probably out of memory). */
-    for( ;; ) { }
+    for( ;; )
+    {
+    }
 }

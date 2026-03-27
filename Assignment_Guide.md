@@ -968,184 +968,204 @@ Delayed list: [C wakes@330] → [B wakes@320]
 
 ## 5. Assignment 1: Earliest Deadline First (EDF) - 15%
 
-### 5.1 What Is EDF?
+### 5.1 Big Picture (What You Are Building)
 
-In the default FreeRTOS scheduler, each task has a **fixed priority** set at creation time. The highest-priority ready task always runs. This is called **Fixed-Priority Preemptive Scheduling (FPS)**.
+For this assignment, you are turning FreeRTOS from fixed-priority scheduling into EDF scheduling for periodic real-time tasks.
 
-**EDF (Earliest Deadline First)** is different. Instead of fixed priorities, each task has a **deadline** -- the absolute time by which it must finish its current job. The scheduler always picks the task whose deadline is the **earliest** (closest to now).
+You must support all of these Task-1 requirements **inside the kernel**:
+- EDF dispatch (earliest absolute deadline runs first).
+- Admission control when a task is created.
+- Two admission tests:
+  - implicit deadline task sets (`D_i == T_i`) use utilization test,
+  - constrained deadline task sets (`D_i <= T_i`, and at least one `D_i < T_i`) use exact processor-demand test.
+- Runtime admission (new tasks can be accepted/rejected after scheduler starts).
+- Transient overload policy (if a job misses deadline, drop late job immediately).
+- Detailed tracing prints (task list, releases, finishes, preemptions, resumes, admissions, drops).
+- UART-based prints (not USB stdio) for more stable timing logs.
 
-**Why EDF?** EDF is provably optimal for single-processor systems -- it can schedule any task set that is schedulable. Fixed-priority scheduling (like Rate Monotonic) cannot. EDF achieves up to **100% CPU utilization**, while Rate Monotonic caps at ~69%.
+Think of each periodic task as repeatedly creating jobs. Every job has:
+- release time,
+- absolute deadline,
+- execution budget (WCET).
 
-#### Understanding Periodic Tasks and Deadlines
+EDF always runs the ready job with earliest absolute deadline.
 
-Before we go further, let's make sure we understand what a "periodic task" is, because EDF is designed for them.
+### 5.2 Required EDF Math
 
-A **periodic task** repeats the same job over and over on a fixed schedule. It has three key numbers:
+#### Implicit deadline case (`D_i == T_i` for every task)
 
-- **Period (T):** How often the task repeats. E.g., "every 500 ms."
-- **Execution time (C):** How long the task takes to do its job each period. E.g., "50 ms of actual computation."
-- **Relative Deadline (D):** How much time after the start of each period the task has to finish. Often D = T (must finish before the next period starts).
+Use utilization check:
 
-```
-Period = 500ms, Execution = 50ms, Deadline = 500ms
+$$
+U = \sum_i \frac{C_i}{T_i}
+$$
 
-  |--50ms work--|--------450ms idle---------|--50ms work--|-------...
-  0            50                          500           550
-  ↑                                        ↑
-  Job 1 starts                             Job 2 starts
-  Deadline for Job 1 is at tick 500        Deadline for Job 2 is at tick 1000
-```
+Accept task set if $U \le 1$.
 
-The **absolute deadline** is the actual tick count by which the job must finish. It changes every period:
-- Job 1's absolute deadline = 0 + 500 = 500
-- Job 2's absolute deadline = 500 + 500 = 1000
-- Job 3's absolute deadline = 1000 + 500 = 1500
-- ...
+#### Constrained deadline case (`D_i <= T_i` and at least one strict `<`)
 
-**EDF says: always run the task whose absolute deadline is the smallest (the closest one).**
+Use exact processor-demand test with demand bound function (dbf):
 
-#### EDF Example: Step by Step
+$$
+dbf_i(t) = \max\left(0,\left\lfloor \frac{t - D_i}{T_i} \right\rfloor + 1\right) C_i
+$$
 
-Imagine two periodic tasks:
-- Task A: Period = 5 ticks, Execution time = 2 ticks
-- Task B: Period = 7 ticks, Execution time = 3 ticks
+$$
+DBF(t) = \sum_i dbf_i(t)
+$$
 
-```
-Time 0: Both tasks start their first job.
-  Task A: absolute deadline = 0 + 5 = 5
-  Task B: absolute deadline = 0 + 7 = 7
-  EDF picks Task A (deadline 5 < 7). A runs.
+Feasible iff $DBF(t) \le t$ for all tested instants $t$ in the analysis interval.
 
-Time 2: Task A finishes its 2 ticks of work. A sleeps until tick 5.
-  Only Task B is ready. B runs.
+### 5.3 Files You Will Update
 
-Time 5: Task A's second period starts. New deadline = 5 + 5 = 10.
-  Task B's deadline is still 7 (B hasn't finished yet).
-  EDF keeps running B (deadline 7 < 10).
+| File | Why it changes |
+|------|----------------|
+| `FreeRTOS/Source/tasks.c` | Main EDF logic: task metadata, admission, runtime miss handling, scheduler selection, trace logs |
+| `FreeRTOS/Source/include/task.h` | Public EDF API declarations |
+| `FreeRTOS/Source/include/FreeRTOS.h` | Default compile-time fallback macros |
+| `Demo/.../Standard/FreeRTOSConfig.h` | Enable EDF + tracing options |
+| `Demo/.../Standard/CMakeLists.txt` | Route stdio to UART for deterministic-ish logs |
+| `Demo/.../Standard/main_edf_test.c` | Validation workloads for accept/reject/runtime-add/miss-drop |
 
-Time 5: Task B finishes its 3 ticks of work (ran from tick 2 to 5). B sleeps until tick 7.
-  Only Task A is ready (deadline 10). A runs.
+### 5.4 Kernel Data Model Updates (`tasks.c`)
 
-Time 7: Task A finishes its 2 ticks (ran from tick 5 to 7). A sleeps until tick 10.
-  Task B's second period starts. New deadline = 7 + 7 = 14.
-  B runs (it's the only ready task).
+Add these EDF fields into `TCB_t` (`tskTaskControlBlock`) so each task carries full timing info.
 
-... and so on.
-```
-
-The key insight: **the task with the nearest deadline dynamically gets the highest effective priority**. Unlike fixed-priority where Task A is always "priority 3," in EDF the task that is most urgent RIGHT NOW gets to run.
-
-### 5.2 EDF Design: How to Map It onto FreeRTOS
-
-Remember from Section 4 how FreeRTOS scheduling works:
-1. An **array of 32 ready lists** (`pxReadyTasksLists[0..31]`), one per priority
-2. The scheduler finds the **highest non-empty list** and picks a task from it
-3. Tasks are added to their priority's list using `listINSERT_END` (no sorting)
-
-For EDF, we need a fundamentally different approach:
-1. A **single ready list** where tasks are sorted by their absolute deadline
-2. The scheduler picks the task at the **head** of this list (smallest deadline = most urgent)
-3. Tasks are added using `vListInsert` (sorted by deadline using `xItemValue`)
-
-We keep the old priority lists around for non-EDF tasks (like the Idle task), but EDF tasks go into their own sorted list.
-
-### 5.3 Files to Modify
-
-| File | What to Change | Why |
-|------|---------------|-----|
-| `FreeRTOS/Source/tasks.c` | TCB structure, ready list management, scheduler macro, tick handler | This is the core of the scheduler |
-| `FreeRTOS/Source/include/task.h` | New API functions | So user code can create EDF tasks |
-| `FreeRTOS/Source/include/FreeRTOS.h` | New config macros | On/off switch for EDF |
-| `Demo/.../Standard/FreeRTOSConfig.h` | Enable your new config macros | Turn on EDF for your build |
-| `Demo/.../Standard/main.c` or new test file | Test application with periodic tasks | Prove it works |
-
-### 5.4 Step-by-Step Implementation
-
-#### Step 1: Add New Configuration Macro
-
-**What:** A compile-time switch that lets you turn EDF on or off. If it's 0 (off), FreeRTOS behaves normally. If it's 1, your EDF code activates.
-
-**Why:** This way you don't break the original FreeRTOS. You can test with EDF on or off without changing code.
-
-**File:** `Demo/.../Standard/FreeRTOSConfig.h` -- add this line:
 ```c
-/* Set to 1 to enable EDF scheduling. Set to 0 for normal fixed-priority. */
+/* Add this inside tskTaskControlBlock in tasks.c, under EDF compile guard.
+ * These fields are needed for admission tests and runtime deadline handling. */
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    TickType_t xPeriod;             /* T: Job release interval in ticks. */
+    TickType_t xRelativeDeadline;   /* D: Relative deadline in ticks from each release. */
+    TickType_t xAbsoluteDeadline;   /* Absolute deadline of currently active job. */
+    TickType_t xWcetTicks;          /* C: Worst-case execution budget per job (in ticks). */
+    TickType_t xLastReleaseTick;    /* Tick when current job was released. */
+    TickType_t xJobExecTicks;       /* Execution consumed by current job (debug/admission stats). */
+    UBaseType_t uxEDFFlags;         /* Bit flags (e.g., periodic task, job active, was preempted). */
+#endif
+```
+
+Add EDF global lists/variables near other scheduler globals.
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    /* Ready EDF jobs sorted by absolute deadline; head is next to run. */
+    PRIVILEGED_DATA static List_t xEDFReadyList;
+
+    /* Registry of all admitted EDF periodic tasks (ready + blocked + delayed).
+     * Admission control must consider the whole accepted set, not just ready tasks. */
+    PRIVILEGED_DATA static List_t xEDFTaskRegistryList;
+
+    /* Optional counters useful for tracing and demo metrics. */
+    PRIVILEGED_DATA static UBaseType_t uxEDFAcceptedTaskCount = 0U;
+    PRIVILEGED_DATA static UBaseType_t uxEDFRejectedTaskCount = 0U;
+#endif
+```
+
+### 5.5 Config + Trace Macros
+
+In `FreeRTOSConfig.h`, add/verify:
+
+```c
+/* Enable EDF scheduler path in kernel. */
 #define configUSE_EDF_SCHEDULING    1
+
+/* Enable/disable EDF trace prints without deleting print calls. */
+#define configEDF_TRACE_ENABLE      1
+
+/* Use the standard FreeRTOS pattern where configPRINTF is configurable.
+ * This lets you switch output backends later without editing kernel logic. */
+#define configPRINTF( x )           printf x
 ```
 
-**File:** `FreeRTOS/Source/include/FreeRTOS.h` -- add a default so it doesn't break if someone forgets to define it:
+In `FreeRTOS.h`, provide defaults so builds do not break when user config omits them.
+
 ```c
-/* If the user didn't define configUSE_EDF_SCHEDULING in their config,
- * default to 0 (disabled) so the kernel behaves like standard FreeRTOS. */
 #ifndef configUSE_EDF_SCHEDULING
     #define configUSE_EDF_SCHEDULING    0
 #endif
-```
 
-#### Step 2: Add Deadline Fields to the TCB
-
-**What:** Add three new fields to every task's identity card (TCB) so we can track its period, relative deadline, and current absolute deadline.
-
-**File:** `FreeRTOS/Source/tasks.c` -- inside the `tskTaskControlBlock` struct (around line 371), add after the existing fields:
-
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 )
-    TickType_t xRelativeDeadline;
-    TickType_t xPeriod;
-    TickType_t xAbsoluteDeadline;
+#ifndef configEDF_TRACE_ENABLE
+    #define configEDF_TRACE_ENABLE      0
 #endif
 ```
 
-**What each field means:**
-
-| Field | Type | Changes? | Meaning | Example |
-|-------|------|----------|---------|---------|
-| `xPeriod` | `TickType_t` (unsigned 32-bit int) | Never changes after creation | How many ticks between repetitions of this task | 500 (for a 500ms period with 1ms ticks) |
-| `xRelativeDeadline` | `TickType_t` | Never changes after creation | How many ticks after each period start the task must finish | 500 (if deadline = period) |
-| `xAbsoluteDeadline` | `TickType_t` | Updated every period | The actual tick count by which the current job must finish. **This is what the scheduler sorts by.** | At tick 0: absolute deadline = 500. At tick 500: absolute deadline = 1000. Etc. |
-
-**Example:** A task with period=500 and relative deadline=500:
-```
-Tick    0: xAbsoluteDeadline = 0 + 500 = 500
-Tick  500: xAbsoluteDeadline = 500 + 500 = 1000
-Tick 1000: xAbsoluteDeadline = 1000 + 500 = 1500
-```
-
-#### Step 3: Create an EDF Task Creation Function
-
-**What:** A new function (like `xTaskCreate`, but for EDF tasks) that the user calls to create a periodic task with a period and deadline.
-
-**File:** `FreeRTOS/Source/include/task.h` -- add the declaration:
+In `tasks.c`, add trace helper macros and small trace helpers.
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    BaseType_t xTaskCreateEDF(
-        TaskFunction_t pxTaskCode,
-        const char * const pcName,
-        const configSTACK_DEPTH_TYPE uxStackDepth,
-        void * const pvParameters,
-        TickType_t xPeriod,
-        TickType_t xRelativeDeadline,
-        TaskHandle_t * const pxCreatedTask
-    );
+    #if ( configEDF_TRACE_ENABLE == 1 )
+        #define edfTRACE( ... ) configPRINTF( ( __VA_ARGS__ ) )
+    #else
+        #define edfTRACE( ... )
+    #endif
+
+    /* Emit one-line admission result with enough detail for demo and debugging. */
+    static void prvEDFTraceAdmission( const char * pcTaskName,
+                                      TickType_t xC,
+                                      TickType_t xT,
+                                      TickType_t xD,
+                                      BaseType_t xAccepted,
+                                      const char * pcReason )
+    {
+        edfTRACE( "[EDF][tick=%lu][admission] task=%s C=%lu T=%lu D=%lu result=%s reason=%s\r\n",
+                  ( unsigned long ) xTaskGetTickCount(),
+                  pcTaskName,
+                  ( unsigned long ) xC,
+                  ( unsigned long ) xT,
+                  ( unsigned long ) xD,
+                  ( xAccepted == pdPASS ) ? "ACCEPT" : "REJECT",
+                  pcReason );
+    }
 #endif
 ```
 
-**What each parameter means:**
+### 5.6 EDF API (`task.h`) and Create Path (`tasks.c`)
 
-| Parameter | Type | What It Is | Example |
-|-----------|------|-----------|---------|
-| `pxTaskCode` | `TaskFunction_t` (function pointer) | The function this task will run. Must be `void myFunc(void *params)` with an infinite loop inside. | `vBlinkRedLED` |
-| `pcName` | `const char *` | A human-readable name for the task, only used for debugging. Max length is `configMAX_TASK_NAME_LEN` (default 16 chars). | `"RedLED"` |
-| `uxStackDepth` | `configSTACK_DEPTH_TYPE` (usually `uint16_t`) | How many **words** (not bytes!) of stack space to give this task. Each word is 4 bytes on RP2040. So 256 words = 1024 bytes. Used for local variables, function calls, etc. | `256` |
-| `pvParameters` | `void *` | A pointer to anything you want to pass into the task function. The task receives this as its parameter. Pass `NULL` if the task doesn't need any input. | `NULL` or `&myConfig` |
-| `xPeriod` | `TickType_t` (unsigned 32-bit int) | The task's period in ticks. Use `pdMS_TO_TICKS(ms)` to convert milliseconds to ticks. | `pdMS_TO_TICKS(500)` for 500ms |
-| `xRelativeDeadline` | `TickType_t` | The task's relative deadline in ticks. Often equals the period (must finish before next period). | `pdMS_TO_TICKS(500)` |
-| `pxCreatedTask` | `TaskHandle_t *` | Output: FreeRTOS writes the task's handle here so you can refer to the task later (e.g., to delete it). Pass `NULL` if you don't need the handle. | `NULL` or `&xMyTaskHandle` |
+You need WCET (`C`) for admission control, so extend API to include it.
 
-**Return value:** `pdPASS` (success) or `errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY` (failed -- not enough heap memory).
+```c
+/* task.h */
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    /* Create a periodic EDF task.
+     * xWcetTicks is required for admission control (C/T/D checks). */
+    BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
+                               const char * const pcName,
+                               const configSTACK_DEPTH_TYPE uxStackDepth,
+                               void * const pvParameters,
+                               TickType_t xPeriod,
+                               TickType_t xRelativeDeadline,
+                               TickType_t xWcetTicks,
+                               TaskHandle_t * const pxCreatedTask );
 
-**File:** `FreeRTOS/Source/tasks.c` -- implement the function:
+    /* Call at end of each periodic job to release next one and delay to next period. */
+    void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime );
+#endif
+```
+
+Add EDF admission helper declarations in `tasks.c` (private/static).
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    /* Candidate parameters used by admission logic before task is inserted. */
+    typedef struct xEDFAdmissionTaskParams
+    {
+        TickType_t xC;            /* WCET (execution budget) */
+        TickType_t xT;            /* Period */
+        TickType_t xD;            /* Relative deadline */
+        const char * pcName;      /* Used only for tracing */
+    } EDFAdmissionTaskParams_t;
+
+    static BaseType_t prvEDFAdmissionControl( const EDFAdmissionTaskParams_t * pxCandidate,
+                                              const char ** ppcReason );
+    static BaseType_t prvEDFAdmissionImplicit( const EDFAdmissionTaskParams_t * pxCandidate,
+                                               const char ** ppcReason );
+    static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * pxCandidate,
+                                                  const char ** ppcReason );
+#endif
+```
+
+Now integrate admission in `xTaskCreateEDF` itself.
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
@@ -1155,288 +1175,334 @@ BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
                            void * const pvParameters,
                            TickType_t xPeriod,
                            TickType_t xRelativeDeadline,
+                           TickType_t xWcetTicks,
                            TaskHandle_t * const pxCreatedTask )
 {
     TCB_t * pxNewTCB;
-    BaseType_t xReturn;
+    BaseType_t xReturn = pdFAIL;
+    const char * pcReason = "UNKNOWN";
+    EDFAdmissionTaskParams_t xCandidate;
 
-    /* prvCreateTask is an internal FreeRTOS function that allocates memory
-     * for the TCB and stack, then calls prvInitialiseNewTask to set up
-     * the TCB fields. We pass tskIDLE_PRIORITY + 1 as the priority
-     * because EDF tasks don't use priority for scheduling -- they use
-     * deadlines instead. We just need a priority above idle (0) so
-     * FreeRTOS doesn't treat them as idle tasks. */
-    pxNewTCB = prvCreateTask( pxTaskCode, pcName, uxStackDepth, pvParameters,
-                              tskIDLE_PRIORITY + 1, pxCreatedTask );
-
-    if( pxNewTCB != NULL )
+    /* Basic parameter validation first so kernel rejects bad API usage early. */
+    if( ( xPeriod == 0U ) || ( xRelativeDeadline == 0U ) || ( xWcetTicks == 0U ) )
     {
-        /* Set the EDF-specific fields in the TCB. */
-
-        /* xPeriod: how often this task repeats (constant, never changes). */
-        pxNewTCB->xPeriod = xPeriod;
-
-        /* xRelativeDeadline: how many ticks after each period start the
-         * task must finish (constant, never changes). */
-        pxNewTCB->xRelativeDeadline = xRelativeDeadline;
-
-        /* xAbsoluteDeadline: the actual tick time the current job must
-         * finish by. For the very first job, the task starts at tick 0,
-         * so its first absolute deadline = 0 + xRelativeDeadline. */
-        pxNewTCB->xAbsoluteDeadline = xRelativeDeadline;
-
-        /* Add the task to the ready list so the scheduler knows about it. */
-        prvAddNewTaskToReadyList( pxNewTCB );
-
-        xReturn = pdPASS;
+        prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, "zero parameter" );
+        return pdFAIL;
     }
-    else
+
+    if( xRelativeDeadline > xPeriod )
     {
-        /* Memory allocation failed. */
-        xReturn = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+        /* Assignment asks constrained-deadline support, which means D <= T. */
+        prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, "D > T not supported" );
+        return pdFAIL;
     }
+
+    /* Prepare candidate object used by admission functions. */
+    xCandidate.xC = xWcetTicks;
+    xCandidate.xT = xPeriod;
+    xCandidate.xD = xRelativeDeadline;
+    xCandidate.pcName = pcName;
+
+    /* Admission and insertion must be atomic while scheduler is running. */
+    taskENTER_CRITICAL();
+    {
+        /* This works both pre-start and runtime, so requirement "accept new tasks
+         * while system is running" is satisfied by the same API path. */
+        if( prvEDFAdmissionControl( &xCandidate, &pcReason ) == pdPASS )
+        {
+            /* Allocate and initialize the task after admission says OK. */
+            pxNewTCB = prvCreateTask( pxTaskCode,
+                                      pcName,
+                                      uxStackDepth,
+                                      pvParameters,
+                                      tskIDLE_PRIORITY + 1U,
+                                      pxCreatedTask );
+
+            if( pxNewTCB != NULL )
+            {
+                /* Fill EDF timing metadata for first job. */
+                pxNewTCB->xPeriod = xPeriod;
+                pxNewTCB->xRelativeDeadline = xRelativeDeadline;
+                pxNewTCB->xWcetTicks = xWcetTicks;
+                pxNewTCB->xLastReleaseTick = xTaskGetTickCount();
+                pxNewTCB->xAbsoluteDeadline = pxNewTCB->xLastReleaseTick + xRelativeDeadline;
+                pxNewTCB->xJobExecTicks = 0U;
+                pxNewTCB->uxEDFFlags = 0U;
+
+                /* Add task to scheduler and internal EDF registry. */
+                prvAddNewTaskToReadyList( pxNewTCB );
+                vListInsertEnd( &xEDFTaskRegistryList, &( pxNewTCB->xEventListItem ) );
+                uxEDFAcceptedTaskCount++;
+
+                prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdPASS, "admitted" );
+                edfTRACE( "[EDF][tick=%lu][task-add] task=%s mode=%s\r\n",
+                          ( unsigned long ) xTaskGetTickCount(),
+                          pcName,
+                          ( xTaskGetSchedulerState() == taskSCHEDULER_RUNNING ) ? "runtime" : "pre-start" );
+
+                xReturn = pdPASS;
+            }
+            else
+            {
+                prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, "allocation failed" );
+                xReturn = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            }
+        }
+        else
+        {
+            uxEDFRejectedTaskCount++;
+            prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, pcReason );
+            xReturn = pdFAIL;
+        }
+    }
+    taskEXIT_CRITICAL();
 
     return xReturn;
 }
 #endif
 ```
 
-#### Step 4: Add the EDF Ready List and Modify How Tasks Are Added
+### 5.7 Admission Control Functions (Complete Kernel Logic)
 
-**What:** Instead of putting EDF tasks into `pxReadyTasksLists[priority]`, we put them into a single new list sorted by deadline. Non-EDF tasks (like Idle) still go into the original priority lists.
-
-**File:** `FreeRTOS/Source/tasks.c` -- add a new global variable near the other list declarations (around line 476):
+#### 5.7.1 Dispatch function
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    /* A single sorted list for all EDF tasks. Tasks are sorted by
-     * xAbsoluteDeadline (stored in xStateListItem.xItemValue).
-     * The task at the HEAD of the list has the earliest deadline
-     * and should run next. */
-    PRIVILEGED_DATA static List_t xEDFReadyList;
-#endif
-```
-
-**Now modify the `prvAddTaskToReadyList` macro** (around line 285). This macro is called every time a task becomes ready (created, woken from delay, unblocked from a queue, etc.):
-
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 )
-    #define prvAddTaskToReadyList( pxTCB )                                             \
-    do {                                                                               \
-        traceMOVED_TASK_TO_READY_STATE( pxTCB );                                       \
-        /* Check if this is an EDF task (has a period > 0) or a                        \
-         * non-EDF task (like Idle, which has period 0). */                             \
-        if( ( pxTCB )->xPeriod > 0 )                                                   \
-        {                                                                              \
-            /* EDF task: set xItemValue to the absolute deadline so                    \
-             * vListInsert will sort it in ascending deadline order.                    \
-             * The task with the smallest deadline ends up at the head. */              \
-            listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ),                   \
-                                     ( pxTCB )->xAbsoluteDeadline );                   \
-            vListInsert( &xEDFReadyList, &( ( pxTCB )->xStateListItem ) );             \
-        }                                                                              \
-        else                                                                           \
-        {                                                                              \
-            /* Non-EDF task (Idle, Timer, etc.): use the original                      \
-             * priority-based ready list, exactly like standard FreeRTOS. */            \
-            taskRECORD_READY_PRIORITY( ( pxTCB )->uxPriority );                        \
-            listINSERT_END( &( pxReadyTasksLists[ ( pxTCB )->uxPriority ] ),           \
-                            &( ( pxTCB )->xStateListItem ) );                          \
-        }                                                                              \
-        tracePOST_MOVED_TASK_TO_READY_STATE( pxTCB );                                  \
-    } while( 0 )
-#else
-    /* Original FreeRTOS macro (unchanged when EDF is disabled). */
-    #define prvAddTaskToReadyList( pxTCB )                                                                     \
-    do {                                                                                                       \
-        traceMOVED_TASK_TO_READY_STATE( pxTCB );                                                               \
-        taskRECORD_READY_PRIORITY( ( pxTCB )->uxPriority );                                                    \
-        listINSERT_END( &( pxReadyTasksLists[ ( pxTCB )->uxPriority ] ), &( ( pxTCB )->xStateListItem ) );     \
-        tracePOST_MOVED_TASK_TO_READY_STATE( pxTCB );                                                          \
-    } while( 0 )
-#endif
-```
-
-**Note:** If you later implement CBS (Assignment 3), you will update this macro to add tie-breaking in favor of CBS server tasks. See CBS Step 6.
-
-**What's happening here visually:**
-
-```
-Before (standard FreeRTOS):
-  pxReadyTasksLists[3]: [TaskA] → [TaskD]       (all priority 3, unsorted)
-  pxReadyTasksLists[2]: [TaskB]                  (priority 2)
-  pxReadyTasksLists[0]: [Idle]                   (priority 0)
-
-After (with EDF):
-  xEDFReadyList: [TaskB dl:500] → [TaskA dl:800] → [TaskD dl:1200]    (sorted by deadline!)
-  pxReadyTasksLists[0]: [Idle]                                         (non-EDF stays here)
-```
-
-#### Step 5: Modify the Scheduler to Pick the Earliest Deadline
-
-**What:** Change `taskSELECT_HIGHEST_PRIORITY_TASK` so that instead of finding the highest-priority list and round-robining, it simply picks the head of the EDF sorted list (the task with the smallest deadline).
-
-**File:** `FreeRTOS/Source/tasks.c` -- modify the `taskSELECT_HIGHEST_PRIORITY_TASK` macro (around line 195):
-
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 )
-    #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
-    do {                                                                          \
-        if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )                     \
-        {                                                                         \
-            /* There are EDF tasks ready to run. Pick the one at the              \
-             * head of the sorted list -- it has the earliest (smallest)          \
-             * absolute deadline, so it's the most urgent. */                     \
-            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY(               \
-                                           &xEDFReadyList );                      \
-        }                                                                         \
-        else                                                                      \
-        {                                                                         \
-            /* No EDF tasks are ready (all blocked/delayed).                      \
-             * Fall back to the idle task in pxReadyTasksLists[0].               \
-             * The idle task is always ready (it never blocks). */                 \
-            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY(               \
-                               &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) );      \
-        }                                                                         \
-    } while( 0 )
-#else
-    /* Original macro (unchanged). */
-    #define taskSELECT_HIGHEST_PRIORITY_TASK()                                       \
-    do {                                                                             \
-        UBaseType_t uxTopPriority = uxTopReadyPriority;                              \
-        while( listLIST_IS_EMPTY( &( pxReadyTasksLists[ uxTopPriority ] ) ) )       \
-        {                                                                            \
-            --uxTopPriority;                                                         \
-        }                                                                            \
-        listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB,                                  \
-                                     &( pxReadyTasksLists[ uxTopPriority ] ) );      \
-        uxTopReadyPriority = uxTopPriority;                                          \
-    } while( 0 )
-#endif
-```
-
-**Notice the difference:**
-- Original: searches through an array of 32 lists, then does round-robin with `listGET_OWNER_OF_NEXT_ENTRY`.
-- EDF: simply grabs the head of ONE sorted list with `listGET_OWNER_OF_HEAD_ENTRY`. Much simpler! The sorting was done at insertion time.
-
-#### Step 6: Initialize the EDF Ready List
-
-**What:** The new list needs to be initialized before it's used (set up its sentinel, pointers, etc.).
-
-**File:** `FreeRTOS/Source/tasks.c` -- in `prvInitialiseTaskLists()` (around line 6082), add after the existing loop that initializes ready lists:
-
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 )
-    /* Initialize the EDF ready list. This sets up the sentinel node
-     * (xListEnd) and clears the item count. Must be done before any
-     * EDF tasks are created. */
-    vListInitialise( &xEDFReadyList );
-#endif
-```
-
-#### Step 7: Handle Periodic Task Re-activation (Deadline Update)
-
-**What:** When a periodic EDF task finishes its work for the current period, it needs to:
-1. Update its `xAbsoluteDeadline` for the next period (push it forward by one period).
-2. Block (sleep) until the next period starts.
-
-We create a helper function that each periodic task calls at the end of every loop iteration:
-
-**File:** `FreeRTOS/Source/include/task.h` -- add the declaration:
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 )
-    /* Call this at the end of each period in your periodic EDF task.
-     * It updates the task's deadline and blocks until the next period.
-     * pxPreviousWakeTime: pointer to a variable that tracks wake times
-     *                     (initialize it with xTaskGetTickCount() before
-     *                     your task's main loop). */
-    void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime );
-#endif
-```
-
-**File:** `FreeRTOS/Source/tasks.c` -- implement it:
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 )
-void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime )
+static BaseType_t prvEDFAdmissionControl( const EDFAdmissionTaskParams_t * pxCandidate,
+                                          const char ** ppcReason )
 {
-    /* Get a pointer to the currently running task's TCB. */
-    TCB_t * pxCurrentTCBLocal = pxCurrentTCB;
+    const ListItem_t * pxIt;
+    BaseType_t xHasConstrained = pdFALSE;
 
-    /* Push the absolute deadline forward by one period.
-     * Example: if xAbsoluteDeadline was 500 and xPeriod is 500,
-     * the new deadline becomes 1000. */
-    pxCurrentTCBLocal->xAbsoluteDeadline += pxCurrentTCBLocal->xPeriod;
-
-    /* Block this task until the next period starts.
-     * vTaskDelayUntil handles the precise timing -- it calculates
-     * the exact tick to wake up at, independent of how long the
-     * task actually took to execute. This prevents period drift.
-     *
-     * Internally, this removes the task from the EDF ready list
-     * and puts it in the delayed list. When it wakes up,
-     * prvAddTaskToReadyList is called, which re-inserts it into
-     * the EDF ready list with the updated deadline. */
-    vTaskDelayUntil( pxPreviousWakeTime, pxCurrentTCBLocal->xPeriod );
-}
-#endif
-```
-
-**How a periodic EDF task uses this:**
-```c
-void vMyPeriodicTask( void * pvParameters )
-{
-    /* Initialize the wake time tracker. */
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-
-    for( ;; )  /* Infinite loop -- one iteration = one "job" */
+    /* If ANY admitted task has D < T, exact constrained test is required. */
+    for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+         pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
+         pxIt = listGET_NEXT( pxIt ) )
     {
-        /* === Do the task's actual work here === */
-        doSomethingUseful();
+        const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
 
-        /* === Done with this period's work. Sleep until next period. === */
-        vTaskDelayUntilNextPeriod( &xLastWakeTime );
-        /* When we wake up, xAbsoluteDeadline has been updated
-         * and we're back in the EDF ready list with the new deadline. */
+        if( pxTCB->xRelativeDeadline < pxTCB->xPeriod )
+        {
+            xHasConstrained = pdTRUE;
+            break;
+        }
     }
+
+    if( pxCandidate->xD < pxCandidate->xT )
+    {
+        xHasConstrained = pdTRUE;
+    }
+
+    if( xHasConstrained == pdTRUE )
+    {
+        return prvEDFAdmissionConstrained( pxCandidate, ppcReason );
+    }
+
+    return prvEDFAdmissionImplicit( pxCandidate, ppcReason );
 }
+#endif
 ```
 
-#### Step 8: Modify the Tick Handler for EDF Preemption
+#### 5.7.2 Implicit path (`U <= 1`)
 
-**What:** In the original FreeRTOS, when a task wakes up from the delayed list, the kernel checks if it should preempt the current task by comparing **priorities**. For EDF, we compare **deadlines** instead.
-
-**File:** `FreeRTOS/Source/tasks.c` -- in `xTaskIncrementTick()` (around line 4736)
-
-Find the code that checks for preemption after unblocking a delayed task. In the original code it looks like:
-```c
-if( pxTCB->uxPriority > pxCurrentTCB->uxPriority )
-{
-    xSwitchRequired = pdTRUE;
-}
-```
-
-Replace it with:
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    /* EDF preemption check: the newly woken task should preempt
-     * the currently running task if it has an EARLIER deadline.
-     *
-     * IMPORTANT: we also check xPeriod to handle the idle task.
-     * The idle task has xPeriod == 0 and xAbsoluteDeadline == 0
-     * (never initialized for EDF). Without the xPeriod check,
-     * any EDF task's deadline (e.g. 1000) would appear "later"
-     * than idle's 0, and EDF tasks would never preempt idle
-     * after waking from a delay. */
-    if( pxTCB->xPeriod > 0 )
+/* Uses fixed-point micro-units to avoid floating-point math in kernel.
+ * scale = 1,000,000 means utilization 1.0 == 1,000,000. */
+static BaseType_t prvEDFAdmissionImplicit( const EDFAdmissionTaskParams_t * pxCandidate,
+                                           const char ** ppcReason )
+{
+    const uint32_t ulScale = 1000000UL;
+    uint64_t ullUtil = 0ULL;
+    const ListItem_t * pxIt;
+
+    for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+         pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
+         pxIt = listGET_NEXT( pxIt ) )
     {
-        if( ( pxCurrentTCB->xPeriod == 0 ) ||
+        const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+        ullUtil += ( ( uint64_t ) pxTCB->xWcetTicks * ulScale ) / pxTCB->xPeriod;
+    }
+
+    ullUtil += ( ( uint64_t ) pxCandidate->xC * ulScale ) / pxCandidate->xT;
+
+    if( ullUtil <= ulScale )
+    {
+        *ppcReason = "implicit U<=1";
+        return pdPASS;
+    }
+
+    *ppcReason = "implicit U>1";
+    return pdFAIL;
+}
+#endif
+```
+
+#### 5.7.3 Constrained path (exact dbf)
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+/* Exact processor-demand test over candidate deadline grid.
+ * This is intentionally explicit and heavily commented for clarity. */
+static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * pxCandidate,
+                                              const char ** ppcReason )
+{
+    TickType_t xTTest;
+    TickType_t xMaxDeadline = pxCandidate->xD;
+    const ListItem_t * pxIt;
+
+    /* Pick a safe finite horizon for class project workloads.
+     * You can tighten this later, but this keeps logic understandable. */
+    TickType_t xHorizon = pxCandidate->xT + pxCandidate->xD;
+
+    /* Expand horizon using admitted tasks so we do not stop too early. */
+    for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+         pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
+         pxIt = listGET_NEXT( pxIt ) )
+    {
+        const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+
+        if( pxTCB->xRelativeDeadline > xMaxDeadline )
+        {
+            xMaxDeadline = pxTCB->xRelativeDeadline;
+        }
+
+        if( ( pxTCB->xPeriod + pxTCB->xRelativeDeadline ) > xHorizon )
+        {
+            xHorizon = pxTCB->xPeriod + pxTCB->xRelativeDeadline;
+        }
+    }
+
+    /* Evaluate demand at each deadline instant t in [1, horizon].
+     * We use a straightforward loop for educational clarity. */
+    for( xTTest = 1U; xTTest <= xHorizon; xTTest++ )
+    {
+        uint64_t ullDemand = 0ULL;
+
+        /* Demand from already admitted tasks. */
+        for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+             pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
+             pxIt = listGET_NEXT( pxIt ) )
+        {
+            const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+
+            /* dbf_i(t) = max(0, floor((t-D)/T)+1) * C */
+            if( xTTest >= pxTCB->xRelativeDeadline )
+            {
+                uint64_t ullJobs = ( ( uint64_t ) ( xTTest - pxTCB->xRelativeDeadline ) / pxTCB->xPeriod ) + 1ULL;
+                ullDemand += ullJobs * pxTCB->xWcetTicks;
+            }
+        }
+
+        /* Demand from candidate task. */
+        if( xTTest >= pxCandidate->xD )
+        {
+            uint64_t ullCandidateJobs = ( ( uint64_t ) ( xTTest - pxCandidate->xD ) / pxCandidate->xT ) + 1ULL;
+            ullDemand += ullCandidateJobs * pxCandidate->xC;
+        }
+
+        /* If demand exceeds interval length, set is infeasible. */
+        if( ullDemand > ( uint64_t ) xTTest )
+        {
+            *ppcReason = "constrained DBF>t";
+            return pdFAIL;
+        }
+    }
+
+    *ppcReason = "constrained DBF<=t";
+    return pdPASS;
+}
+#endif
+```
+
+### 5.8 Ready List + Scheduler Selection
+
+Update task insertion macro so EDF tasks go to sorted EDF ready list.
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    #define prvAddTaskToReadyList( pxTCB )                                              \
+    do {                                                                                 \
+        traceMOVED_TASK_TO_READY_STATE( pxTCB );                                         \
+                                                                                         \
+        if( ( pxTCB )->xPeriod > 0U )                                                    \
+        {                                                                                \
+            /* Store absolute deadline in list item so vListInsert sorts by deadline. */ \
+            listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ),                    \
+                                     ( pxTCB )->xAbsoluteDeadline );                     \
+                                                                                         \
+            /* EDF queue is always deadline-sorted in ascending order. */                \
+            vListInsert( &xEDFReadyList, &( ( pxTCB )->xStateListItem ) );               \
+        }                                                                                \
+        else                                                                             \
+        {                                                                                \
+            /* Non-EDF tasks (idle/timer) keep default behavior. */                     \
+            taskRECORD_READY_PRIORITY( ( pxTCB )->uxPriority );                          \
+            listINSERT_END( &( pxReadyTasksLists[ ( pxTCB )->uxPriority ] ),            \
+                            &( ( pxTCB )->xStateListItem ) );                            \
+        }                                                                                \
+                                                                                         \
+        tracePOST_MOVED_TASK_TO_READY_STATE( pxTCB );                                    \
+    } while( 0 )
+#endif
+```
+
+Update task pick macro to choose EDF head.
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    #define taskSELECT_HIGHEST_PRIORITY_TASK()                                        \
+    do {                                                                              \
+        if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )                         \
+        {                                                                             \
+            /* Head owner has earliest deadline -> run it now. */                    \
+            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFReadyList );\
+        }                                                                             \
+        else                                                                          \
+        {                                                                             \
+            /* Fall back to idle when no EDF task is ready. */                       \
+            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY(                  \
+                &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) );                        \
+        }                                                                             \
+    } while( 0 )
+#endif
+```
+
+Initialize EDF lists in `prvInitialiseTaskLists()`.
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    /* Must initialize both EDF lists before any EDF task creation call. */
+    vListInitialise( &xEDFReadyList );
+    vListInitialise( &xEDFTaskRegistryList );
+#endif
+```
+
+### 5.9 Tick Processing: Preemption + Deadline-Miss Drop Policy
+
+#### 5.9.1 Preemption check (deadline-based)
+
+In `xTaskIncrementTick()`, replace priority comparison with EDF comparison:
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    /* If a newly readied EDF task has earlier deadline than current EDF task,
+     * request a context switch immediately. */
+    if( pxTCB->xPeriod > 0U )
+    {
+        if( ( pxCurrentTCB->xPeriod == 0U ) ||
             ( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
         {
             xSwitchRequired = pdTRUE;
+            edfTRACE( "[EDF][tick=%lu][preempt] in=%s dl=%lu out=%s dl=%lu\r\n",
+                      ( unsigned long ) xTickCount,
+                      pxTCB->pcTaskName,
+                      ( unsigned long ) pxTCB->xAbsoluteDeadline,
+                      pxCurrentTCB->pcTaskName,
+                      ( unsigned long ) pxCurrentTCB->xAbsoluteDeadline );
         }
     }
 #else
-    /* Standard FreeRTOS: preempt if higher priority. */
     if( pxTCB->uxPriority > pxCurrentTCB->uxPriority )
     {
         xSwitchRequired = pdTRUE;
@@ -1444,17 +1510,13 @@ Replace it with:
 #endif
 ```
 
-Also **disable time slicing** for EDF tasks. Time slicing is the round-robin mechanism that switches between tasks of equal priority every tick. EDF doesn't use priority-based round-robin -- it uses deadlines. Find the time-slicing code and wrap it:
+Disable time-slicing in EDF mode:
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 0 )
-    /* Time slicing only makes sense for fixed-priority scheduling.
-     * Under EDF, we don't round-robin -- we always run the task
-     * with the earliest deadline. */
     #if ( ( configUSE_PREEMPTION == 1 ) && ( configUSE_TIME_SLICING == 1 ) )
     {
-        if( listCURRENT_LIST_LENGTH(
-                &( pxReadyTasksLists[ pxCurrentTCB->uxPriority ] ) ) > 1U )
+        if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ pxCurrentTCB->uxPriority ] ) ) > 1U )
         {
             xSwitchRequired = pdTRUE;
         }
@@ -1463,261 +1525,263 @@ Also **disable time slicing** for EDF tasks. Time slicing is the round-robin mec
 #endif
 ```
 
-#### Step 9: Write a Test Application
+#### 5.9.2 Drop-late-job policy helper
 
-**File:** `Demo/.../Standard/main_edf_test.c` (new file) or modify `main_blinky.c`
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+/* Drop current late job immediately and move task to next job release.
+ * This is your chosen transient-overload policy. */
+static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
+{
+    /* Emit trace before state update for easier debugging timeline. */
+    edfTRACE( "[EDF][tick=%lu][drop] task=%s missed_deadline=%lu consumed=%lu wcet=%lu\r\n",
+              ( unsigned long ) xNow,
+              pxTCB->pcTaskName,
+              ( unsigned long ) pxTCB->xAbsoluteDeadline,
+              ( unsigned long ) pxTCB->xJobExecTicks,
+              ( unsigned long ) pxTCB->xWcetTicks );
+
+    /* Advance to next job window. */
+    pxTCB->xLastReleaseTick += pxTCB->xPeriod;
+    pxTCB->xAbsoluteDeadline = pxTCB->xLastReleaseTick + pxTCB->xRelativeDeadline;
+    pxTCB->xJobExecTicks = 0U;
+
+    /* Remove from ready state if needed, then delay until next period. */
+    if( listIS_CONTAINED_WITHIN( &xEDFReadyList, &( pxTCB->xStateListItem ) ) != pdFALSE )
+    {
+        ( void ) uxListRemove( &( pxTCB->xStateListItem ) );
+    }
+
+    /* Reinsert through delayed path for next release boundary. */
+    prvAddCurrentTaskToDelayedList( pxTCB->xPeriod, pdFALSE );
+}
+#endif
+```
+
+#### 5.9.3 Where to call drop check
+
+Add this in tick path (after tick increments and before/around schedule decision) for current EDF task:
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    if( ( pxCurrentTCB->xPeriod > 0U ) && ( xTickCount > pxCurrentTCB->xAbsoluteDeadline ) )
+    {
+        /* Deadline passed while job still active -> immediate drop policy. */
+        prvEDFDropLateJob( pxCurrentTCB, xTickCount );
+        xSwitchRequired = pdTRUE;
+    }
+#endif
+```
+
+### 5.10 Period Boundary Helper
+
+Keep `vTaskDelayUntilNextPeriod()` but make it update per-job metadata and trace release/finish.
+
+```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime )
+{
+    TCB_t * pxTCB = pxCurrentTCB;
+    TickType_t xNow = xTaskGetTickCount();
+
+    /* Job finished point for tracing. */
+    edfTRACE( "[EDF][tick=%lu][finish] task=%s dl=%lu exec=%lu\r\n",
+              ( unsigned long ) xNow,
+              pxTCB->pcTaskName,
+              ( unsigned long ) pxTCB->xAbsoluteDeadline,
+              ( unsigned long ) pxTCB->xJobExecTicks );
+
+    /* Move release/deadline to next job. */
+    pxTCB->xLastReleaseTick += pxTCB->xPeriod;
+    pxTCB->xAbsoluteDeadline = pxTCB->xLastReleaseTick + pxTCB->xRelativeDeadline;
+    pxTCB->xJobExecTicks = 0U;
+
+    /* Delay until next release to preserve periodic behavior. */
+    vTaskDelayUntil( pxPreviousWakeTime, pxTCB->xPeriod );
+
+    /* New job release point for tracing after wake. */
+    edfTRACE( "[EDF][tick=%lu][release] task=%s new_dl=%lu\r\n",
+              ( unsigned long ) xTaskGetTickCount(),
+              pxTCB->pcTaskName,
+              ( unsigned long ) pxTCB->xAbsoluteDeadline );
+}
+#endif
+```
+
+### 5.11 UART Trace Setup (`CMakeLists.txt`)
+
+For `main_edf_test` target in RP2040 Standard demo CMake:
+
+```cmake
+# Route EDF logs to UART to reduce USB scheduling jitter in traces.
+pico_enable_stdio_uart(main_edf_test 1)
+pico_enable_stdio_usb(main_edf_test 0)
+```
+
+In `main.c`, keep `stdio_init_all();` in hardware init so UART stdio is initialized by Pico SDK.
+
+### 5.12 Integrated Test Design (`main_edf_test.c`)
+
+You should update the EDF test to verify all required scenarios (accept, reject, runtime add, miss/drop).
 
 ```c
 #include "FreeRTOS.h"
 #include "task.h"
-#include "pico/stdlib.h"      /* Pico SDK: GPIO, stdio */
+#include "pico/stdlib.h"
 
-/* Each task gets its own GPIO pin. When the task is running,
- * its pin is HIGH. When it's done (sleeping), its pin is LOW.
- * Connect LEDs or a logic analyzer to these pins to see the schedule. */
-#define LED_PIN_TASK_A  2
-#define LED_PIN_TASK_B  3
+/* Test pins to visualize key tasks on a logic analyzer. */
+#define PIN_TASK_IMPLICIT   2
+#define PIN_TASK_CONSTR     3
 
-/* Task A: runs every 500ms, does ~100ms of work each time.
- * Deadline = period = 500ms (must finish before next period). */
-void vTaskA( void * pvParameters )
+/* Forward declarations for task bodies. */
+static void vImplicitTask( void * pvParameters );
+static void vConstrainedTask( void * pvParameters );
+static void vRuntimeCreatorTask( void * pvParameters );
+
+/* Simple periodic task with D=T case for implicit admission path. */
+static void vImplicitTask( void * pvParameters )
 {
-    /* Initialize the wake-time tracker to the current tick.
-     * vTaskDelayUntilNextPeriod uses this to calculate exact
-     * periodic wake-up times. */
-    TickType_t xLastWakeTime = xTaskGetTickCount();
+    TickType_t xLastWake = xTaskGetTickCount();
 
     for( ;; )
     {
-        /* Signal that Task A is running (turn on LED / set GPIO high). */
-        gpio_put( LED_PIN_TASK_A, 1 );
+        gpio_put( PIN_TASK_IMPLICIT, 1 );
 
-        /* Simulate doing ~100ms of work by busy-waiting.
-         * In a real application, this would be actual computation
-         * (reading a sensor, processing data, etc.). */
+        /* Simulate bounded execution below WCET. */
         TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 100 ) )
+        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 30 ) )
         {
-            /* Busy wait -- the task is "working." */
+            /* Busy compute for deterministic demo behavior. */
         }
 
-        /* Signal that Task A is done with this period's work. */
-        gpio_put( LED_PIN_TASK_A, 0 );
-
-        /* Sleep until the next period. This also updates the deadline.
-         * The task will wake up at xLastWakeTime + period (500ms).
-         * While sleeping, other tasks can use the CPU. */
-        vTaskDelayUntilNextPeriod( &xLastWakeTime );
+        gpio_put( PIN_TASK_IMPLICIT, 0 );
+        vTaskDelayUntilNextPeriod( &xLastWake );
     }
 }
 
-/* Task B: runs every 1000ms, does ~200ms of work each time.
- * Deadline = period = 1000ms. */
-void vTaskB( void * pvParameters )
+/* Constrained task with D<T to force exact DBF admission path. */
+static void vConstrainedTask( void * pvParameters )
 {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
+    TickType_t xLastWake = xTaskGetTickCount();
 
     for( ;; )
     {
-        gpio_put( LED_PIN_TASK_B, 1 );
+        gpio_put( PIN_TASK_CONSTR, 1 );
 
         TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 200 ) )
+        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 20 ) )
         {
-            /* Busy wait. */
+            /* Busy compute for constrained workload. */
         }
 
-        gpio_put( LED_PIN_TASK_B, 0 );
+        gpio_put( PIN_TASK_CONSTR, 0 );
+        vTaskDelayUntilNextPeriod( &xLastWake );
+    }
+}
 
-        vTaskDelayUntilNextPeriod( &xLastWakeTime );
+/* Runtime creator validates "add task while running" and admission rejection path. */
+static void vRuntimeCreatorTask( void * pvParameters )
+{
+    /* Wait so scheduler is clearly running before runtime add. */
+    vTaskDelay( pdMS_TO_TICKS( 2000 ) );
+
+    /* This one should typically pass if your base set has slack. */
+    ( void ) xTaskCreateEDF( vImplicitTask,
+                             "RT_ADD_OK",
+                             256,
+                             NULL,
+                             pdMS_TO_TICKS( 300 ),
+                             pdMS_TO_TICKS( 300 ),
+                             pdMS_TO_TICKS( 60 ),
+                             NULL );
+
+    /* This one is intentionally heavy to trigger admission reject. */
+    ( void ) xTaskCreateEDF( vConstrainedTask,
+                             "RT_ADD_REJECT",
+                             256,
+                             NULL,
+                             pdMS_TO_TICKS( 100 ),
+                             pdMS_TO_TICKS( 80 ),
+                             pdMS_TO_TICKS( 95 ),
+                             NULL );
+
+    /* Optionally force overload/miss by spinning too long in this task or others,
+     * then confirm kernel emits [drop] trace and skips late job immediately. */
+    for( ;; )
+    {
+        vTaskDelay( pdMS_TO_TICKS( 1000 ) );
     }
 }
 
 void main_edf_test( void )
 {
-    /* Initialize GPIO pins for LEDs. */
-    gpio_init( LED_PIN_TASK_A );
-    gpio_set_dir( LED_PIN_TASK_A, GPIO_OUT );
-    gpio_init( LED_PIN_TASK_B );
-    gpio_set_dir( LED_PIN_TASK_B, GPIO_OUT );
+    gpio_init( PIN_TASK_IMPLICIT );
+    gpio_set_dir( PIN_TASK_IMPLICIT, GPIO_OUT );
+    gpio_init( PIN_TASK_CONSTR );
+    gpio_set_dir( PIN_TASK_CONSTR, GPIO_OUT );
 
-    /* Create Task A: period=500ms, deadline=500ms.
-     * pdMS_TO_TICKS() converts milliseconds to ticks.
-     * With configTICK_RATE_HZ=1000, pdMS_TO_TICKS(500) = 500 ticks. */
-    xTaskCreateEDF( vTaskA,               /* Task function */
-                    "TaskA",              /* Name (for debugging) */
-                    256,                  /* Stack size in words */
-                    NULL,                 /* No parameters to pass */
-                    pdMS_TO_TICKS( 500 ), /* Period: 500ms */
-                    pdMS_TO_TICKS( 500 ), /* Deadline: 500ms (= period) */
-                    NULL );               /* Don't need the handle */
+    /* Print startup task table so demo clearly shows all (C,T,D) values. */
+    printf( "[EDF][startup] Creating initial task set...\r\n" );
 
-    /* Create Task B: period=1000ms, deadline=1000ms. */
-    xTaskCreateEDF( vTaskB,
-                    "TaskB",
-                    256,
-                    NULL,
-                    pdMS_TO_TICKS( 1000 ),
-                    pdMS_TO_TICKS( 1000 ),
-                    NULL );
+    /* Implicit case: D = T -> utilization admission path. */
+    ( void ) xTaskCreateEDF( vImplicitTask,
+                             "IMPLICIT_A",
+                             256,
+                             NULL,
+                             pdMS_TO_TICKS( 200 ),
+                             pdMS_TO_TICKS( 200 ),
+                             pdMS_TO_TICKS( 40 ),
+                             NULL );
 
-    /* Start the scheduler. This function never returns.
-     * From this point on, FreeRTOS is in control. It will
-     * create the Idle task, start the tick timer, and begin
-     * running the task with the earliest deadline. */
+    /* Constrained case: D < T -> exact DBF path. */
+    ( void ) xTaskCreateEDF( vConstrainedTask,
+                             "CONSTR_B",
+                             256,
+                             NULL,
+                             pdMS_TO_TICKS( 300 ),
+                             pdMS_TO_TICKS( 150 ),
+                             pdMS_TO_TICKS( 35 ),
+                             NULL );
+
+    /* Runtime creator task itself can be normal FreeRTOS or EDF.
+     * Using xTaskCreate keeps this helper outside EDF admission accounting. */
+    ( void ) xTaskCreate( vRuntimeCreatorTask,
+                          "RUNTIME_CREATOR",
+                          256,
+                          NULL,
+                          tskIDLE_PRIORITY + 1U,
+                          NULL );
+
     vTaskStartScheduler();
 
-    /* We should never get here. If we do, it means the scheduler
-     * failed to start (probably out of memory). */
-    for( ;; ) { }
+    for( ;; )
+    {
+        /* Should never execute unless scheduler fails to start. */
+    }
 }
 ```
 
-**What you should see on the logic analyzer:**
+### 5.13 Required Event Logs Checklist
 
-```
-Time (ms):  0    100   200   500  600   700  1000  1100  1200
-            |     |     |     |    |     |    |     |     |
-Task A:     ██████░░░░░░░░░░░██████░░░░░░░░░██████░░░░░░░░░░
-Task B:     ░░░░░░████████████░░░░░░░░░░░░░░░░░░░░░████████████
-Idle:       ░░░░░░░░░░░░░░░░░░░░░░██████████░░░░░░░░░░░░░░░░
+Make sure your logs include all of these (assignment + your request):
+- startup task table (`C`, `T`, `D`, first absolute deadline),
+- admission result for each create request (accept/reject + reason),
+- runtime task add events,
+- job release,
+- job finish,
+- preemption,
+- resume after preemption,
+- deadline miss + late job dropped.
 
-█ = running    ░ = sleeping/idle
+### 5.14 End-of-Section Checklist (Task 1 Complete When All True)
 
-- At tick 0: A's deadline=500, B's deadline=1000. A runs first (earlier deadline).
-- At tick 100: A finishes, sleeps until 500. B runs (deadline 1000).
-- At tick 300: B finishes, sleeps until 1000. Idle runs.
-- At tick 500: A wakes up, new deadline=1000. B still sleeping.
-  A and B both have deadline 1000, but A woke up first, so A runs.
-- At tick 600: A finishes. Idle runs until tick 1000.
-- At tick 1000: Both wake up. A's deadline=1500, B's deadline=2000.
-  A runs first (earlier deadline). Then B. Then Idle. ...
-```
-
-### 5.5 Summary of All Changes for EDF
-
-| File | Change | Lines (approx.) |
-|------|--------|-----------------|
-| `tasks.c` | Add `xRelativeDeadline`, `xPeriod`, `xAbsoluteDeadline` to TCB struct | ~line 450 |
-| `tasks.c` | Add `xEDFReadyList` global variable | ~line 480 |
-| `tasks.c` | Modify `prvAddTaskToReadyList` macro (EDF tasks → sorted list, non-EDF → priority list) | ~line 285 |
-| `tasks.c` | Modify `taskSELECT_HIGHEST_PRIORITY_TASK` macro (pick head of sorted EDF list) | ~line 195 |
-| `tasks.c` | Modify `xTaskIncrementTick` (compare deadlines instead of priorities for preemption) | ~line 4849 |
-| `tasks.c` | Disable time-slicing for EDF in `xTaskIncrementTick` | ~line 4880 |
-| `tasks.c` | Initialize `xEDFReadyList` in `prvInitialiseTaskLists` | ~line 6090 |
-| `tasks.c` | Implement `xTaskCreateEDF()` function | new function |
-| `tasks.c` | Implement `vTaskDelayUntilNextPeriod()` function | new function |
-| `task.h` | Declare `xTaskCreateEDF` and `vTaskDelayUntilNextPeriod` | near other API declarations |
-| `FreeRTOS.h` | Add `configUSE_EDF_SCHEDULING` with default value 0 | near other config defaults |
-| `FreeRTOSConfig.h` | Set `configUSE_EDF_SCHEDULING` to 1 | anywhere in the file |
-| Demo test file | Create test tasks with known periods/deadlines | new file |
-
-### 5.6 Build, Flash, and Visualize the EDF Test
-
-#### Prerequisites
-
-- **Pico SDK** installed (see `FreeRTOS_on_RPi_Pico.pdf` setup guide)
-- **Raspberry Pi Pico H** (or Pico W) board
-- **Micro USB cable** for flashing
-- **Optional: LEDs + 220Ω resistors** (or a logic analyzer) for visualization
-
-#### Hardware Wiring
-
-| GPIO | Connect to | Purpose |
-|------|------------|---------|
-| **GPIO 2** | LED + 220Ω resistor → GND | Task A: ON when running, OFF when sleeping |
-| **GPIO 3** | LED + 220Ω resistor → GND | Task B: ON when running, OFF when sleeping |
-
-The Pico has built-in LED on pin 25 (PICO_DEFAULT_LED_PIN), but the test uses GPIO 2 and 3 for separate task visibility.
-
-#### Build Steps
-
-1. Open a terminal in the Standard demo directory:
-   ```
-   cd FreeRTOS\FreeRTOS\Demo\ThirdParty\Community-Supported-Demos\CORTEX_M0+_RP2040\Standard
-   ```
-
-2. Create and enter a build directory:
-   ```
-   mkdir build
-   cd build
-   ```
-
-3. Run CMake (set `FREERTOS_DEMO_PATH` if needed):
-   ```
-   cmake ..
-   ```
-
-4. Build the EDF test target:
-   ```
-   cmake --build . --target main_edf_test
-   ```
-
-   Or on Windows with Visual Studio: `cmake --build . --config Release --target main_edf_test`
-
-5. The output `.uf2` file will be at:
-   ```
-   build\main_edf_test\main_edf_test.uf2
-   ```
-
-#### Flash to the Pico
-
-1. Hold the **BOOTSEL** button on the Pico.
-2. Plug in the USB cable (or release and reconnect while holding BOOTSEL).
-3. The Pico appears as a USB drive (e.g., `RPI-RP2`).
-4. Drag and drop `main_edf_test.uf2` onto the drive.
-5. The Pico reboots and runs the EDF test.
-
-#### How to Visualize (Verify It Works)
-
-**Option A: LEDs (simplest)**
-
-- Connect GPIO 2 and 3 to LEDs (with 220Ω resistors to GND).
-- **Task A (GPIO 2):** Blinks every ~500 ms, stays ON for ~100 ms.
-- **Task B (GPIO 3):** Blinks every ~1000 ms, stays ON for ~200 ms.
-- When both run: **Task A preempts Task B** when A’s deadline is closer (e.g., A runs briefly at 500 ms even if B was running).
-- If LEDs blink in this pattern, EDF scheduling is behaving correctly.
-
-**Option B: Logic analyzer**
-
-- Connect probes to GPIO 2 and 3 (and optionally GND).
-- Use Saleae Logic, Digilent WaveForms, or a cheap clone.
-- Capture at 1 kHz or higher.
-- You should see:
-  - Task A: ~100 ms HIGH every 500 ms.
-  - Task B: ~200 ms HIGH every 1000 ms.
-  - Interleaving when A preempts B (e.g., A’s pulse at 500 ms even if B was running).
-- Measure exact durations to confirm deadlines are met.
-
-**Option C: Serial output (debug only)**
-
-- Add `printf` in the task loops (e.g., when turning LED on).
-- Enable USB serial in `CMakeLists.txt`:
-  ```cmake
-  pico_enable_stdio_usb(main_edf_test 1)
-  pico_enable_stdio_uart(main_edf_test 0)
-  ```
-- Open a serial terminal (e.g., PuTTY, minicom) at 115200 baud.
-- You’ll see periodic messages when each task runs. **Note:** `printf` is slow and can distort timing; use only for debugging.
-
-#### Expected Timeline (approximate)
-
-```
-Time (ms):  0    100   200   500  600   700  1000  1100  1200
-            |     |     |     |    |     |    |     |     |
-Task A:     ██████░░░░░░░░░░░██████░░░░░░░░░██████░░░░░░░░░░
-Task B:     ░░░░░░████████████░░░░░░░░░░░░░░░░░░░░░████████████
-Idle:       ░░░░░░░░░░░░░░░░░░░░░░██████████░░░░░░░░░░░░░░░░
-
-█ = running    ░ = sleeping/idle
-
-- 0–100 ms:   A runs (deadline 500 ms)
-- 100–300 ms: B runs (deadline 1000 ms)
-- 300–500 ms: Idle
-- 500 ms:     A wakes up, preempts; A runs for ~100 ms
-- 600–1000 ms: Idle or B (if B was running)
-- 1000 ms:    Both wake; A runs first (deadline 1500 < 2000)
-```
+- EDF dispatch is active when `configUSE_EDF_SCHEDULING == 1`.
+- Fixed-priority behavior still works when EDF config is `0`.
+- Admission path correctly chooses implicit vs constrained test.
+- Runtime task creation is atomically admitted/rejected.
+- Late jobs are dropped immediately once deadline is exceeded.
+- UART trace clearly shows admission and runtime events.
+- `main_edf_test.c` demonstrates pass/fail/runtime-add/drop scenarios.
 
 ---
 
@@ -1912,6 +1976,8 @@ Time 12: B takes Mutex2 (it's free!). Takes Mutex1 (it's free!).
 
 Notice: **B was blocked only ONCE** (before it even started). No deadlocks. No chained blocking.
 
+This is exactly why SRP fits your new EDF implementation well: you can model a bounded SRP blocking term during **admission control**, still allow **runtime task creation** safely, and keep runtime behavior deterministic when combined with your **deadline-miss drop** policy.
+
 #### Important: Binary Semaphores, Not Mutexes
 
 The instructor specifies: _"extend the semaphore implementation of FreeRTOS to use SRP. You only need to extend FreeRTOS with SRP for **binary semaphores**."_
@@ -1956,25 +2022,35 @@ The savings grow as more tasks share the same preemption level. With 100 tasks a
 
 | File | What to Change | Why |
 |------|---------------|-----|
-| `FreeRTOS/Source/tasks.c` | Add preemption level to TCB, add system ceiling global, modify preemption checks | Core scheduler changes |
-| `FreeRTOS/Source/tasks.c` | Add SRP resource registry (`SRPResourceEntry_t`), dynamic ceiling computation, resource API (`xSRPResourceCreate`, `xSRPResourceTake`, `vSRPResourceGive`, `vSRPResourceRegisterUser`) | Counting resources with dynamic ceilings |
-| `FreeRTOS/Source/tasks.c` | Add shared stack table, `prvGetOrCreateSharedStack`, `vSRPReportStackUsage`, `xTaskCreateEDFWithSharedStack` | Run-time stack sharing |
-| `FreeRTOS/Source/tasks.c` | Add admission control function with blocking times | EDF+SRP schedulability |
-| `FreeRTOS/Source/include/task.h` | Declare SRP resource API, preemption level API, shared-stack creation, stack usage report | User-facing API |
-| `FreeRTOS/Source/include/FreeRTOS.h` | Config macros `configUSE_SRP`, `configSRP_STACK_SHARING`, `configMAX_SRP_RESOURCES`, `configMAX_RESOURCE_USERS` | On/off switches and sizing |
-| `Demo/.../FreeRTOSConfig.h` | Enable SRP and stack sharing | Turn them on |
+| `FreeRTOS/Source/tasks.c` | Keep SRP data in TCB (`uxPreemptionLevel`, SRP blocking metadata) and preserve your dynamic-ceiling implementation | Scheduler + analysis state |
+| `FreeRTOS/Source/tasks.c` | Keep SRP resource registry (`SRPResourceEntry_t`) with multi-unit resources and per-task unit demand | Preserve your custom SRP algorithm |
+| `FreeRTOS/Source/tasks.c` | Integrate SRP blocking into EDF admission helpers (`prvEDFAdmissionControl`, implicit path, constrained path) | Admission must reflect EDF+SRP |
+| `FreeRTOS/Source/tasks.c` | Keep SRP gate in preemption and task selection; keep late-drop logic from EDF section | Runtime correctness |
+| `FreeRTOS/Source/tasks.c` | Add SRP-aware trace logs aligned with EDF traces (admission, preempt/resume, drop, resource take/give) | Demo/debug visibility |
+| `FreeRTOS/Source/include/task.h` | Keep/extend SRP API declarations and any SRP admission metadata API you expose | User-facing API |
+| `FreeRTOS/Source/include/FreeRTOS.h` | Keep defaults for `configUSE_SRP` / stack sharing toggles | Feature gating |
+| `Demo/.../FreeRTOSConfig.h` | Ensure `configUSE_EDF_SCHEDULING`, `configUSE_SRP`, trace macros are enabled for test profile | Test setup |
 
-### 6.5 Step-by-Step Implementation
+### 6.5 Step-by-Step Implementation (Updated for Your New EDF Code)
 
-#### Step 1: Add Configuration
+> **Goal:** Keep SRP algorithm behavior unchanged, but make it fully consistent with your new EDF admission control, runtime task creation, overload drop policy, and trace requirements.
 
-**`FreeRTOSConfig.h`:**
+#### Step 1: Configuration and Build-Time Switches
+
+**`FreeRTOSConfig.h` (demo profile):**
 ```c
-#define configUSE_SRP              1    /* Enable Stack Resource Policy */
-#define configSRP_STACK_SHARING    1    /* Enable run-time stack sharing for SRP */
+#define configUSE_EDF_SCHEDULING    1
+#define configUSE_SRP               1
+
+/* Keep enabled while validating behavior. */
+#define configEDF_TRACE_ENABLE      1
+#define configPRINTF( x )           printf x
+
+/* Optional feature if you implemented stack sharing. */
+#define configSRP_STACK_SHARING     1
 ```
 
-**`FreeRTOS.h`:**
+**`FreeRTOS.h` defaults:**
 ```c
 #ifndef configUSE_SRP
     #define configUSE_SRP    0
@@ -1985,290 +2061,101 @@ The savings grow as more tasks share the same preemption level. With 100 tasks a
 #endif
 ```
 
-#### Step 2: Add Preemption Level to TCB
+This keeps all fallback behavior intact when SRP is disabled.
 
-**File:** `tasks.c`, inside the TCB struct:
+#### Step 2: Keep Required Task Metadata (`T`, `D`, `C`, `B`, Preemption Level)
+
+Admission and runtime scheduling now depend on a complete metadata set:
+- `T`: period
+- `D`: relative deadline
+- `C`: WCET
+- `B`: SRP worst-case blocking bound
+- `pi`: SRP preemption level
+
+**`tasks.c` (inside `TCB_t`, representative):**
 ```c
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    TickType_t xPeriod;
+    TickType_t xRelativeDeadline;
+    TickType_t xAbsoluteDeadline;
+    TickType_t xWCET;
+#endif
+
 #if ( configUSE_SRP == 1 )
-    /* The task's preemption level. Higher = more powerful (can preempt
-     * more things). For EDF: inversely proportional to relative deadline.
-     * For fixed-priority: same as uxPriority. Set during task creation. */
     UBaseType_t uxPreemptionLevel;
+    TickType_t xSRPBlockingBound;
+#endif
+
+#if ( configSRP_STACK_SHARING == 1 )
+    TickType_t xSavedWakeTime;
 #endif
 ```
 
-#### Step 3: Add System Ceiling and Resource Registry
+If your code stores these in a different structure, keep that layout; the requirement is equivalent data availability at admission/runtime.
 
-**How dynamic ceilings work:** Under the generalized SRP, each resource can have **multiple units** (a counting resource). The resource ceiling is NOT fixed at creation time -- it changes dynamically based on how many units are currently available.
+#### Step 3: Preserve Your Dynamic-Ceiling Multi-Unit SRP Core
 
-```
-Example:
-  Resource R1 has 3 total units.
-  Task 3 (preemption level 10) needs 1 unit of R1.
-  Task 2 (preemption level 5)  needs 2 units of R1.
-  Task 1 (preemption level 2)  needs 1 unit of R1.
+Keep your existing SRP resource model and do **not** simplify it to classic fixed-ceiling binary locks.
 
-  Time 0: R1 has 3 units available. Ceiling = 0.
-    - Task 3 needs 1, 3 available >= 1 → NOT blocked.
-    - Task 2 needs 2, 3 available >= 2 → NOT blocked.
-    - Task 1 needs 1, 3 available >= 1 → NOT blocked.
-    - No one would be blocked → ceiling = 0.
+For each resource `r` with available units `a_r`:
 
-  Task 2 takes 2 units. R1 now has 3 - 2 = 1 unit available.
-  Recompute ceiling:
-    - Task 3 needs 1, 1 available >= 1 → NOT blocked.
-    - Task 2 needs 2, 1 available <  2 → WOULD be blocked. Level = 5.
-    - Task 1 needs 1, 1 available >= 1 → NOT blocked.
-    - Ceiling = max preemption level of blocked tasks = 5.
+```text
+ceiling(r) = max preemption level among registered users i
+             where units_needed(i, r) > a_r
 
-  System ceiling = max ceiling of all resources = 5.
-  Task 3 (level 10 > 5) CAN preempt. ✓
-  Task 1 (level 2  ≤ 5) CANNOT preempt. ✓ (If Task 1 ran, it could
-    take 1 unit, leaving 0. Then Task 3 would be blocked. SRP prevents this.)
+system_ceiling = max over all resources r of ceiling(r)
 ```
 
-The **rule**: ceiling(R) = max preemption level among all tasks whose unit requirement **exceeds** the currently available units of R. If no task would be blocked, ceiling = 0.
+That is your core algorithm and should remain unchanged.
 
-**File:** `tasks.c`, with other global variables:
+#### Step 4: SRP Resource API (Create/Register/Take/Give) with Trace Hooks
+
+Keep existing APIs and add trace points so events line up with EDF timeline logs.
+
+**`task.h` declarations (representative):**
 ```c
 #if ( configUSE_SRP == 1 )
-
-    /* The system ceiling = max dynamic ceiling across all resources.
-     * A task can only preempt if its preemption level > uxSystemCeiling. */
-    PRIVILEGED_DATA static volatile UBaseType_t uxSystemCeiling = 0;
-
-    /*----------------------------------------------------------
-     * Resource Registry -- tracks all SRP-managed resources
-     *----------------------------------------------------------*/
-
-    /* Max number of distinct SRP resources in the system. */
-    #ifndef configMAX_SRP_RESOURCES
-        #define configMAX_SRP_RESOURCES    16
-    #endif
-
-    /* Max number of tasks that can be registered as users of one resource. */
-    #ifndef configMAX_RESOURCE_USERS
-        #define configMAX_RESOURCE_USERS   16
-    #endif
-
-    /* One entry per task that uses a resource. */
-    typedef struct
-    {
-        UBaseType_t uxPreemptionLevel;  /* The task's preemption level */
-        UBaseType_t uxUnitsNeeded;      /* How many units this task needs */
-    } SRPResourceUser_t;
-
-    /* One entry per SRP resource. */
-    typedef struct
-    {
-        SemaphoreHandle_t xHandle;      /* The underlying FreeRTOS semaphore */
-        UBaseType_t uxTotalUnits;       /* Total units of this resource (n) */
-        volatile UBaseType_t uxAvailableUnits; /* Units currently free */
-        SRPResourceUser_t xUsers[ configMAX_RESOURCE_USERS ];
-        UBaseType_t uxUserCount;        /* Number of registered users */
-        BaseType_t xInUse;              /* pdTRUE if this slot is active */
-    } SRPResourceEntry_t;
-
-    PRIVILEGED_DATA static SRPResourceEntry_t
-        xSRPResources[ configMAX_SRP_RESOURCES ] = { { 0 } };
-
-    /*----------------------------------------------------------
-     * Ceiling Computation
-     *----------------------------------------------------------*/
-
-    /* Compute the current dynamic ceiling of one resource.
-     * = max preemption level among tasks whose unit requirement
-     *   EXCEEDS the currently available units. */
-    static UBaseType_t prvComputeResourceCeiling(
-        const SRPResourceEntry_t * pxRes )
-    {
-        UBaseType_t uxCeiling = 0;
-        UBaseType_t i;
-
-        for( i = 0; i < pxRes->uxUserCount; i++ )
-        {
-            if( pxRes->xUsers[ i ].uxUnitsNeeded > pxRes->uxAvailableUnits )
-            {
-                /* This task WOULD be blocked if it tried to acquire. */
-                if( pxRes->xUsers[ i ].uxPreemptionLevel > uxCeiling )
-                {
-                    uxCeiling = pxRes->xUsers[ i ].uxPreemptionLevel;
-                }
-            }
-        }
-
-        return uxCeiling;
-    }
-
-    /* Recompute the system ceiling from scratch.
-     * System ceiling = max ceiling across ALL resources. */
-    static void prvRecalculateSystemCeiling( void )
-    {
-        UBaseType_t uxNewCeiling = 0;
-        UBaseType_t r;
-
-        for( r = 0; r < configMAX_SRP_RESOURCES; r++ )
-        {
-            if( xSRPResources[ r ].xInUse == pdTRUE )
-            {
-                UBaseType_t uxResCeiling =
-                    prvComputeResourceCeiling( &xSRPResources[ r ] );
-
-                if( uxResCeiling > uxNewCeiling )
-                {
-                    uxNewCeiling = uxResCeiling;
-                }
-            }
-        }
-
-        uxSystemCeiling = uxNewCeiling;
-    }
-
-    /* Look up a resource entry by its semaphore handle.
-     * Returns NULL if the handle is not registered. */
-    static SRPResourceEntry_t * prvFindResource( SemaphoreHandle_t xHandle )
-    {
-        UBaseType_t r;
-
-        for( r = 0; r < configMAX_SRP_RESOURCES; r++ )
-        {
-            if( ( xSRPResources[ r ].xInUse == pdTRUE ) &&
-                ( xSRPResources[ r ].xHandle == xHandle ) )
-            {
-                return &xSRPResources[ r ];
-            }
-        }
-
-        return NULL;
-    }
-
-#endif /* configUSE_SRP */
-```
-
-#### Step 4: SRP Resource API (Create, Register, Take, Give)
-
-Instead of modifying the `Queue_t` struct directly, we maintain a **separate resource registry** that sits alongside FreeRTOS's counting semaphores. This avoids touching internal FreeRTOS data structures and keeps SRP logic in `tasks.c`.
-
-**File:** `task.h` (or a new `srp.h`):
-```c
-#if ( configUSE_SRP == 1 )
-
-    /* Create an SRP-managed counting resource.
-     *
-     * uxMaxUnits: total number of units (e.g., 3 means 3 identical copies
-     *             of this resource exist). All units start available.
-     *
-     * Internally creates a FreeRTOS counting semaphore and registers
-     * it in the SRP resource table.
-     *
-     * Returns: a SemaphoreHandle_t you use with xSRPResourceTake/Give. */
     SemaphoreHandle_t xSRPResourceCreate( UBaseType_t uxMaxUnits );
-
-    /* Register a task as a user of an SRP resource. Call this BEFORE
-     * the scheduler starts, for every (task, resource) pair.
-     *
-     * xResource:         the handle returned by xSRPResourceCreate.
-     * uxPreemptionLevel: the task's preemption level.
-     * uxUnitsNeeded:     how many units this task acquires at once.
-     *
-     * This information is used to compute the dynamic ceiling. */
     void vSRPResourceRegisterUser( SemaphoreHandle_t xResource,
                                    UBaseType_t uxPreemptionLevel,
                                    UBaseType_t uxUnitsNeeded );
-
-    /* Take (acquire) uxUnits units from the SRP resource.
-     * Under SRP, this should NEVER block -- SRP guarantees the units
-     * are available when a task is allowed to run.
-     * Updates available count and recomputes system ceiling. */
     BaseType_t xSRPResourceTake( SemaphoreHandle_t xResource,
                                  UBaseType_t uxUnits );
-
-    /* Give (release) uxUnits units back to the SRP resource.
-     * Updates available count and recomputes system ceiling. */
     void vSRPResourceGive( SemaphoreHandle_t xResource,
                            UBaseType_t uxUnits );
-
 #endif
 ```
 
-**File:** `tasks.c` -- implement:
+**`tasks.c` implementation pattern (representative):**
 ```c
 #if ( configUSE_SRP == 1 )
-
-SemaphoreHandle_t xSRPResourceCreate( UBaseType_t uxMaxUnits )
-{
-    UBaseType_t r;
-    SRPResourceEntry_t * pxEntry = NULL;
-
-    /* Find a free slot in the resource table. */
-    for( r = 0; r < configMAX_SRP_RESOURCES; r++ )
-    {
-        if( xSRPResources[ r ].xInUse == pdFALSE )
-        {
-            pxEntry = &xSRPResources[ r ];
-            break;
-        }
-    }
-    configASSERT( pxEntry != NULL ); /* Out of resource slots */
-
-    /* Create a FreeRTOS counting semaphore with uxMaxUnits.
-     * Initial count = uxMaxUnits (all units start available). */
-    SemaphoreHandle_t xSem = xSemaphoreCreateCounting( uxMaxUnits, uxMaxUnits );
-    configASSERT( xSem != NULL );
-
-    pxEntry->xHandle = xSem;
-    pxEntry->uxTotalUnits = uxMaxUnits;
-    pxEntry->uxAvailableUnits = uxMaxUnits;
-    pxEntry->uxUserCount = 0;
-    pxEntry->xInUse = pdTRUE;
-
-    return xSem;
-}
-
-void vSRPResourceRegisterUser( SemaphoreHandle_t xResource,
-                               UBaseType_t uxPreemptionLevel,
-                               UBaseType_t uxUnitsNeeded )
-{
-    SRPResourceEntry_t * pxRes = prvFindResource( xResource );
-    configASSERT( pxRes != NULL );
-    configASSERT( pxRes->uxUserCount < configMAX_RESOURCE_USERS );
-    configASSERT( uxUnitsNeeded <= pxRes->uxTotalUnits );
-
-    pxRes->xUsers[ pxRes->uxUserCount ].uxPreemptionLevel = uxPreemptionLevel;
-    pxRes->xUsers[ pxRes->uxUserCount ].uxUnitsNeeded = uxUnitsNeeded;
-    pxRes->uxUserCount++;
-
-    /* Recompute ceiling now that a new user is registered.
-     * (Before any units are taken the ceiling is 0 because
-     *  all units are available and nobody would be blocked.
-     *  But it doesn't hurt to recompute.) */
-    prvRecalculateSystemCeiling();
-}
-
 BaseType_t xSRPResourceTake( SemaphoreHandle_t xResource,
                              UBaseType_t uxUnits )
 {
     SRPResourceEntry_t * pxRes = prvFindResource( xResource );
     configASSERT( pxRes != NULL );
-    configASSERT( uxUnits <= pxRes->uxAvailableUnits );
 
     taskENTER_CRITICAL();
     {
-        /* Take uxUnits from the underlying counting semaphore.
-         * Each call to xSemaphoreTake takes 1 unit, so loop. */
-        UBaseType_t i;
-        for( i = 0; i < uxUnits; i++ )
+        configASSERT( uxUnits <= pxRes->uxAvailableUnits );
+
+        for( UBaseType_t i = 0; i < uxUnits; i++ )
         {
             BaseType_t xTaken = xSemaphoreTake( xResource, 0 );
-            configASSERT( xTaken == pdTRUE ); /* SRP guarantees no blocking */
+            configASSERT( xTaken == pdTRUE );
         }
 
-        /* Update available count. */
         pxRes->uxAvailableUnits -= uxUnits;
-
-        /* Recompute the system ceiling. Fewer available units means
-         * more tasks could potentially be blocked → ceiling may rise. */
         prvRecalculateSystemCeiling();
+
+        #if ( configEDF_TRACE_ENABLE == 1 )
+        configPRINTF(("[SRP] TAKE task=%s res=%p units=%u avail=%u sysceil=%u\r\n",
+                      pcTaskGetName( NULL ),
+                      ( void * ) xResource,
+                      ( unsigned ) uxUnits,
+                      ( unsigned ) pxRes->uxAvailableUnits,
+                      ( unsigned ) uxSystemCeiling ));
+        #endif
     }
     taskEXIT_CRITICAL();
 
@@ -2280,684 +2167,440 @@ void vSRPResourceGive( SemaphoreHandle_t xResource,
 {
     SRPResourceEntry_t * pxRes = prvFindResource( xResource );
     configASSERT( pxRes != NULL );
-    configASSERT( pxRes->uxAvailableUnits + uxUnits <= pxRes->uxTotalUnits );
 
     taskENTER_CRITICAL();
     {
-        /* Give uxUnits back to the underlying counting semaphore. */
-        UBaseType_t i;
-        for( i = 0; i < uxUnits; i++ )
+        configASSERT( ( pxRes->uxAvailableUnits + uxUnits ) <= pxRes->uxTotalUnits );
+
+        for( UBaseType_t i = 0; i < uxUnits; i++ )
         {
             xSemaphoreGive( xResource );
         }
 
-        /* Update available count. */
         pxRes->uxAvailableUnits += uxUnits;
-
-        /* Recompute the system ceiling. More available units means
-         * fewer tasks would be blocked → ceiling may drop. */
         prvRecalculateSystemCeiling();
+
+        #if ( configEDF_TRACE_ENABLE == 1 )
+        configPRINTF(("[SRP] GIVE task=%s res=%p units=%u avail=%u sysceil=%u\r\n",
+                      pcTaskGetName( NULL ),
+                      ( void * ) xResource,
+                      ( unsigned ) uxUnits,
+                      ( unsigned ) pxRes->uxAvailableUnits,
+                      ( unsigned ) uxSystemCeiling ));
+        #endif
     }
     taskEXIT_CRITICAL();
 }
-
-#endif /* configUSE_SRP */
-```
-
-**Key SRP insight:** Under SRP, a task is only allowed to start running if its preemption level is above the system ceiling. This guarantees that by the time it tries to acquire units, enough units are **always available**. So `xSRPResourceTake` should **never fail** -- if it does, something is wrong with the user registrations.
-
-#### Step 5: Dynamic Ceiling Walkthrough
-
-To make sure the dynamic ceiling is clear, here's a full walkthrough:
-
-```
-Setup:
-  Resource R1: 3 total units.
-  Task 3 (level 10): needs 1 unit of R1.
-  Task 2 (level 5):  needs 2 units of R1.
-  Task 1 (level 2):  needs 1 unit of R1.
-
-Registration (before scheduler starts):
-  vSRPResourceRegisterUser( R1, 10, 1 );   /* Task 3 */
-  vSRPResourceRegisterUser( R1, 5,  2 );   /* Task 2 */
-  vSRPResourceRegisterUser( R1, 2,  1 );   /* Task 1 */
-
-Time 0: All 3 units available. Ceiling computation:
-  - Task 3 needs 1, 3 >= 1 → not blocked.
-  - Task 2 needs 2, 3 >= 2 → not blocked.
-  - Task 1 needs 1, 3 >= 1 → not blocked.
-  → ceiling(R1) = 0. System ceiling = 0.
-  All tasks can preempt freely.
-
-Time 1: Task 1 (level 2) runs and takes 1 unit.
-  Available = 3 - 1 = 2. Recompute ceiling:
-  - Task 3 needs 1, 2 >= 1 → not blocked.
-  - Task 2 needs 2, 2 >= 2 → not blocked.
-  - Task 1 needs 1, 2 >= 1 → not blocked.
-  → ceiling(R1) = 0. System ceiling = 0.
-
-Time 2: Task 2 (level 5) preempts, takes 2 units.
-  Available = 2 - 2 = 0. Recompute ceiling:
-  - Task 3 needs 1, 0 < 1 → BLOCKED. Level 10.
-  - Task 2 needs 2, 0 < 2 → BLOCKED. Level 5.
-  - Task 1 needs 1, 0 < 1 → BLOCKED. Level 2.
-  → ceiling(R1) = max(10, 5, 2) = 10. System ceiling = 10.
-  Task 3 (level 10) CANNOT preempt (10 > 10 is false).
-
-Time 3: Task 2 gives back 2 units.
-  Available = 0 + 2 = 2. Recompute ceiling:
-  - Task 3 needs 1, 2 >= 1 → not blocked.
-  - Task 2 needs 2, 2 >= 2 → not blocked.
-  - Task 1 needs 1, 2 >= 1 → not blocked.
-  → ceiling(R1) = 0. System ceiling = 0.
-  Task 3 CAN preempt now.
-
-Time 4: Task 1 gives back 1 unit. Available = 3.
-  Ceiling unchanged (already 0).
-```
-
-The old "ceiling stack" approach is replaced by `prvRecalculateSystemCeiling()` which iterates all resources and computes the ceiling from their current state. This is correct for counting resources where the ceiling changes with every take/give.
-
-#### Step 6: Modify the Preemption Check
-
-**File:** `tasks.c` -- wherever preemption is decided
-
-In `xTaskIncrementTick`, when a task wakes up from the delayed list and would normally preempt the current task, add the SRP gate:
-
-```c
-#if ( configUSE_SRP == 1 )
-    /* SRP check: the woken task can only preempt if its preemption
-     * level is strictly GREATER than the system ceiling.
-     * This prevents the task from running if it might need a
-     * resource that's currently held by someone else. */
-    if( pxTCB->uxPreemptionLevel > uxSystemCeiling )
-    {
-        /* SRP allows preemption. Now also check the normal condition. */
-        #if ( configUSE_EDF_SCHEDULING == 1 )
-            if( pxTCB->xPeriod > 0 )
-            {
-                /* The woken task is an EDF task. It should preempt if:
-                 * 1. The current task is NOT an EDF task (e.g. idle), OR
-                 * 2. The current task IS EDF but has a later deadline. */
-                if( ( pxCurrentTCB->xPeriod == 0 ) ||
-                    ( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
-                {
-                    xSwitchRequired = pdTRUE;
-                }
-            }
-        #else
-            if( pxTCB->uxPriority > pxCurrentTCB->uxPriority )
-            {
-                xSwitchRequired = pdTRUE;
-            }
-        #endif
-    }
-    /* else: SRP blocks this task, even if it has a higher priority
-     * or earlier deadline. It will run later when the system ceiling drops. */
-#else
-    /* No SRP -- use standard or EDF preemption check. */
-    #if ( configUSE_EDF_SCHEDULING == 1 )
-        if( pxTCB->xPeriod > 0 )
-        {
-            if( ( pxCurrentTCB->xPeriod == 0 ) ||
-                ( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
-            {
-                xSwitchRequired = pdTRUE;
-            }
-        }
-    #else
-        if( pxTCB->uxPriority > pxCurrentTCB->uxPriority )
-        {
-            xSwitchRequired = pdTRUE;
-        }
-    #endif
 #endif
 ```
 
-**Important note about the idle task:** When comparing deadlines (`xAbsoluteDeadline`), always check whether the current task is actually an EDF task (`xPeriod > 0`). The idle task has `xPeriod == 0` and `xAbsoluteDeadline == 0` (never initialized). Without this check, any EDF task's deadline (e.g., 1000) would appear "later" than idle's deadline (0), and EDF tasks would never preempt idle after waking from a delay. This was a bug we caught during EDF testing.
+#### Step 5: Compute SRP Blocking Bound `B` for Admission
 
-Also modify `taskSELECT_HIGHEST_PRIORITY_TASK` to skip tasks whose preemption level is not above the system ceiling:
+To combine EDF + SRP correctly, each task must have a conservative SRP blocking bound `B_i`.
+
+A practical method in your design:
+1. Keep resource-user registration table (already present).
+2. Store/derive each critical section WCET estimate (per task or per task-resource usage).
+3. Compute `B_i` as maximum lower-preemption-level interference relevant to task `i` under your ceiling model.
+
+Store resulting bound in task metadata (`xSRPBlockingBound`) and candidate admission parameters.
+
+#### Step 6: Extend Admission Candidate Struct
+
+Your EDF candidate should explicitly include SRP blocking:
 
 ```c
-#if ( configUSE_EDF_SCHEDULING == 1 ) && ( configUSE_SRP == 1 )
-    #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
-    do {                                                                          \
-        /* Walk the EDF list from the head (earliest deadline).                   \
-         * Skip any task whose preemption level <= system ceiling. */              \
-        ListItem_t * pxIterator = listGET_HEAD_ENTRY( &xEDFReadyList );           \
-        ListItem_t const * pxEnd = listGET_END_MARKER( &xEDFReadyList );          \
-        pxCurrentTCB = NULL;                                                      \
-        while( pxIterator != ( ListItem_t * ) pxEnd )                             \
-        {                                                                         \
-            TCB_t * pxCandidate = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxIterator );\
-            if( pxCandidate->uxPreemptionLevel > uxSystemCeiling )                \
-            {                                                                     \
-                pxCurrentTCB = pxCandidate;                                       \
-                break;                                                            \
-            }                                                                     \
-            pxIterator = listGET_NEXT( pxIterator );                              \
-        }                                                                         \
-        if( pxCurrentTCB == NULL )                                                \
-        {                                                                         \
-            /* No EDF task can run (all blocked by SRP). Run idle. */              \
-            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY(               \
-                               &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) );      \
-        }                                                                         \
-    } while( 0 )
-#endif
-```
-
-#### Step 7: API for Setting Preemption Level
-
-**File:** `task.h`:
-```c
-#if ( configUSE_SRP == 1 )
-    /* Set a task's SRP preemption level. Call after xTaskCreate/xTaskCreateEDF.
-     * xTask: the task handle (or NULL for the calling task).
-     * uxLevel: the preemption level (higher = can preempt more). */
-    void vTaskSetPreemptionLevel( TaskHandle_t xTask, UBaseType_t uxLevel );
-
-    /* Get a task's SRP preemption level. */
-    UBaseType_t uxTaskGetPreemptionLevel( TaskHandle_t xTask );
-#endif
-```
-
-**File:** `tasks.c`:
-```c
-#if ( configUSE_SRP == 1 )
-void vTaskSetPreemptionLevel( TaskHandle_t xTask, UBaseType_t uxLevel )
+typedef struct EDFAdmissionTaskParams
 {
-    /* If xTask is NULL, use the currently running task. */
-    TCB_t * pxTCB = prvGetTCBFromHandle( xTask );
+    TickType_t xPeriod;             /* T */
+    TickType_t xRelativeDeadline;   /* D */
+    TickType_t xWCET;               /* C */
+    TickType_t xBlocking;           /* B from SRP */
+} EDFAdmissionTaskParams_t;
+```
+
+Then `prvEDFAdmissionControl()` dispatch remains the same style as Section 5, but both admission paths consume `xBlocking`.
+
+#### Step 7: Implicit Path Admission (`D = T`) Must Use `(C+B)/T`
+
+For implicit-deadline systems, your fixed-point utilization check should account for blocking:
+
+```text
+sum_i (C_i + B_i) / T_i <= 1
+```
+
+Representative kernel implementation:
+
+```c
+static BaseType_t prvEDFAdmissionImplicit( const EDFAdmissionTaskParams_t * pxCandidate,
+                                           const char ** ppcReason )
+{
+    const uint32_t ulScale = 1000000UL;
+    uint64_t ullUtil = 0;
+
+    for( each admitted EDF task j )
+    {
+        ullUtil += ( ( uint64_t ) ( pxTCBj->xWCET + pxTCBj->xSRPBlockingBound ) * ulScale )
+                   / ( uint64_t ) pxTCBj->xPeriod;
+    }
+
+    ullUtil += ( ( uint64_t ) ( pxCandidate->xWCET + pxCandidate->xBlocking ) * ulScale )
+               / ( uint64_t ) pxCandidate->xPeriod;
+
+    if( ullUtil <= ulScale )
+    {
+        #if ( configEDF_TRACE_ENABLE == 1 )
+        configPRINTF(("[ADM][IMPLICIT][PASS] util=%llu/1000000\r\n", ullUtil ));
+        #endif
+        return pdPASS;
+    }
+
+    *ppcReason = "implicit admission failed: sum((C+B)/T) > 1";
+    #if ( configEDF_TRACE_ENABLE == 1 )
+    configPRINTF(("[ADM][IMPLICIT][FAIL] util=%llu reason=%s\r\n", ullUtil, *ppcReason ));
+    #endif
+    return pdFAIL;
+}
+```
+
+#### Step 8: Constrained Path Admission (`D <= T`) Must Include Blocking in DBF Test
+
+For constrained deadlines, keep your exact test style and add blocking term:
+
+```text
+For each tested time point t in deadline grid:
+    demand(t) + blocking_term(t) <= t
+```
+
+Representative structure:
+
+```c
+static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * pxCandidate,
+                                              const char ** ppcReason )
+{
+    for( each deadline-grid point t )
+    {
+        uint64_t ullDemand = 0;
+        TickType_t xBlocking = 0;
+
+        for( each admitted task j and candidate )
+        {
+            uint64_t ullJobs = 0;
+            if( t >= Dj )
+            {
+                ullJobs = ( ( t - Dj ) / Tj ) + 1U;
+            }
+
+            ullDemand += ullJobs * Cj;
+
+            if( Bj > xBlocking )
+            {
+                xBlocking = Bj;
+            }
+        }
+
+        if( ( ullDemand + xBlocking ) > t )
+        {
+            *ppcReason = "constrained admission failed: DBF + B exceeds test point";
+            #if ( configEDF_TRACE_ENABLE == 1 )
+            configPRINTF(("[ADM][CONSTR][FAIL] t=%u demand=%llu B=%u\r\n",
+                          ( unsigned ) t,
+                          ullDemand,
+                          ( unsigned ) xBlocking ));
+            #endif
+            return pdFAIL;
+        }
+    }
+
+    #if ( configEDF_TRACE_ENABLE == 1 )
+    configPRINTF(("[ADM][CONSTR][PASS]\r\n"));
+    #endif
+    return pdPASS;
+}
+```
+
+#### Step 9: Integrate SRP Blocking in `xTaskCreateEDF` Admission (Boot + Runtime)
+
+Your updated create path should:
+1. Build candidate `(T, D, C, B)`.
+2. Run admission dispatch.
+3. Accept/reject atomically.
+4. Emit trace message with reason.
+
+Representative flow:
+
+```c
+BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
+                           const char * const pcName,
+                           const configSTACK_DEPTH_TYPE uxStackDepth,
+                           void * const pvParameters,
+                           TickType_t xPeriod,
+                           TickType_t xRelativeDeadline,
+                           TickType_t xWCET,
+                           TaskHandle_t * const pxCreatedTask )
+{
+    BaseType_t xReturn = pdFAIL;
+    const char * pcReason = "unset";
+
+    EDFAdmissionTaskParams_t xCandidate;
+    xCandidate.xPeriod = xPeriod;
+    xCandidate.xRelativeDeadline = xRelativeDeadline;
+    xCandidate.xWCET = xWCET;
+
+    #if ( configUSE_SRP == 1 )
+    xCandidate.xBlocking = prvComputeCandidateSRPBlockingBound( pcName, xPeriod, xRelativeDeadline, xWCET );
+    #else
+    xCandidate.xBlocking = 0;
+    #endif
 
     taskENTER_CRITICAL();
     {
-        pxTCB->uxPreemptionLevel = uxLevel;
+        if( prvEDFAdmissionControl( &xCandidate, &pcReason ) == pdPASS )
+        {
+            xReturn = prvCreateAndInsertEDFTask( pxTaskCode,
+                                                 pcName,
+                                                 uxStackDepth,
+                                                 pvParameters,
+                                                 xPeriod,
+                                                 xRelativeDeadline,
+                                                 xWCET,
+                                                 xCandidate.xBlocking,
+                                                 pxCreatedTask );
+        }
+        else
+        {
+            xReturn = pdFAIL;
+        }
     }
     taskEXIT_CRITICAL();
-}
 
-UBaseType_t uxTaskGetPreemptionLevel( TaskHandle_t xTask )
-{
-    TCB_t * pxTCB = prvGetTCBFromHandle( xTask );
-    return pxTCB->uxPreemptionLevel;
-}
-#endif
-```
-
-#### Step 8: Run-time Stack Sharing Implementation
-
-**File:** `tasks.c` -- add the shared stack infrastructure with the other globals:
-
-```c
-#if ( configUSE_SRP == 1 ) && ( configSRP_STACK_SHARING == 1 )
-
-    /* Maximum number of distinct preemption levels that use stack sharing. */
-    #ifndef configMAX_PREEMPTION_LEVELS
-        #define configMAX_PREEMPTION_LEVELS    32
+    #if ( configEDF_TRACE_ENABLE == 1 )
+    configPRINTF(("[ADM][%s] task=%s T=%u D=%u C=%u B=%u reason=%s\r\n",
+                  ( xReturn == pdPASS ) ? "ACCEPT" : "REJECT",
+                  pcName,
+                  ( unsigned ) xPeriod,
+                  ( unsigned ) xRelativeDeadline,
+                  ( unsigned ) xWCET,
+                  ( unsigned ) xCandidate.xBlocking,
+                  pcReason ));
     #endif
 
-    /* Each entry tracks a shared stack buffer for one preemption level. */
-    typedef struct
-    {
-        UBaseType_t uxPreemptionLevel;   /* Which preemption level */
-        StackType_t * pxSharedStack;     /* The shared stack buffer */
-        configSTACK_DEPTH_TYPE uxMaxStackDepth; /* Sized to the largest task */
-        UBaseType_t uxTaskCount;         /* How many tasks share this stack */
-        BaseType_t xInUse;               /* pdTRUE if this slot is taken */
-    } SharedStackEntry_t;
-
-    PRIVILEGED_DATA static SharedStackEntry_t
-        xSharedStackTable[ configMAX_PREEMPTION_LEVELS ] = { 0 };
-
-    /* Also track the total "without sharing" allocation for reporting. */
-    PRIVILEGED_DATA static size_t xTotalStackWithoutSharing = 0;
-
-    /* Look up or create a shared stack for the given preemption level.
-     * If one already exists but is too small, it is reallocated to
-     * the larger size. MUST be called before the scheduler starts
-     * (i.e., during task creation). */
-    static StackType_t * prvGetOrCreateSharedStack(
-        UBaseType_t uxPreemptionLevel,
-        configSTACK_DEPTH_TYPE uxStackDepth )
-    {
-        UBaseType_t i;
-        SharedStackEntry_t * pxEntry = NULL;
-
-        /* Track what we WOULD allocate without sharing. */
-        xTotalStackWithoutSharing += ( size_t ) uxStackDepth * sizeof( StackType_t );
-
-        /* Search for an existing entry at this preemption level. */
-        for( i = 0; i < configMAX_PREEMPTION_LEVELS; i++ )
-        {
-            if( ( xSharedStackTable[ i ].xInUse == pdTRUE ) &&
-                ( xSharedStackTable[ i ].uxPreemptionLevel == uxPreemptionLevel ) )
-            {
-                pxEntry = &xSharedStackTable[ i ];
-                break;
-            }
-        }
-
-        if( pxEntry != NULL )
-        {
-            /* Shared stack exists. Grow it if this task needs more space. */
-            if( uxStackDepth > pxEntry->uxMaxStackDepth )
-            {
-                vPortFree( pxEntry->pxSharedStack );
-                pxEntry->pxSharedStack = ( StackType_t * ) pvPortMalloc(
-                    ( size_t ) uxStackDepth * sizeof( StackType_t ) );
-                configASSERT( pxEntry->pxSharedStack != NULL );
-                pxEntry->uxMaxStackDepth = uxStackDepth;
-            }
-            pxEntry->uxTaskCount++;
-            return pxEntry->pxSharedStack;
-        }
-
-        /* No entry yet -- find a free slot. */
-        for( i = 0; i < configMAX_PREEMPTION_LEVELS; i++ )
-        {
-            if( xSharedStackTable[ i ].xInUse == pdFALSE )
-            {
-                pxEntry = &xSharedStackTable[ i ];
-                break;
-            }
-        }
-        configASSERT( pxEntry != NULL );
-
-        pxEntry->xInUse = pdTRUE;
-        pxEntry->uxPreemptionLevel = uxPreemptionLevel;
-        pxEntry->uxMaxStackDepth = uxStackDepth;
-        pxEntry->uxTaskCount = 1;
-        pxEntry->pxSharedStack = ( StackType_t * ) pvPortMalloc(
-            ( size_t ) uxStackDepth * sizeof( StackType_t ) );
-        configASSERT( pxEntry->pxSharedStack != NULL );
-        return pxEntry->pxSharedStack;
-    }
-#endif
-```
-
-**File:** `tasks.c` -- add a task creation function that uses shared stacks:
-
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 ) && ( configUSE_SRP == 1 ) && ( configSRP_STACK_SHARING == 1 )
-
-    BaseType_t xTaskCreateEDFWithSharedStack(
-        TaskFunction_t pxTaskCode,
-        const char * const pcName,
-        const configSTACK_DEPTH_TYPE uxStackDepth,
-        void * const pvParameters,
-        TickType_t xPeriod,
-        TickType_t xRelativeDeadline,
-        UBaseType_t uxPreemptionLevel,
-        TaskHandle_t * const pxCreatedTask )
-    {
-        /* Look up or create the shared stack for this preemption level. */
-        StackType_t * pxSharedStack = prvGetOrCreateSharedStack(
-            uxPreemptionLevel, uxStackDepth );
-
-        /* We need a StaticTask_t for each task (the TCB is always private,
-         * only the STACK memory is shared). Allocate dynamically. */
-        StaticTask_t * pxTaskBuffer = ( StaticTask_t * ) pvPortMalloc(
-            sizeof( StaticTask_t ) );
-        configASSERT( pxTaskBuffer != NULL );
-
-        /* Create the task using the static API, providing the shared stack. */
-        TaskHandle_t xHandle = xTaskCreateStatic(
-            pxTaskCode,
-            pcName,
-            uxStackDepth,
-            pvParameters,
-            tskIDLE_PRIORITY + 1,   /* Priority doesn't matter for EDF */
-            pxSharedStack,          /* <-- SHARED stack buffer */
-            pxTaskBuffer );
-
-        if( xHandle != NULL )
-        {
-            /* Set EDF fields. */
-            TCB_t * pxTCB = ( TCB_t * ) xHandle;
-            pxTCB->xPeriod = xPeriod;
-            pxTCB->xRelativeDeadline = xRelativeDeadline;
-            pxTCB->xAbsoluteDeadline = xRelativeDeadline;
-
-            /* Set SRP preemption level. */
-            pxTCB->uxPreemptionLevel = uxPreemptionLevel;
-
-            if( pxCreatedTask != NULL )
-            {
-                *pxCreatedTask = xHandle;
-            }
-            return pdPASS;
-        }
-
-        return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
-    }
-
-#endif
-```
-
-**Important constraint:** Because tasks at the same preemption level share a physical stack, their local variables can be overwritten by each other between periods. Task functions should store any state that must persist across periods in:
-- **Global/static variables**, or
-- **TCB fields** (e.g., a new `xSavedWakeTime` field for `vTaskDelayUntilNextPeriod`)
-
-For the periodic wake time, add a field to the TCB:
-```c
-#if ( configSRP_STACK_SHARING == 1 )
-    TickType_t xSavedWakeTime;
-#endif
-```
-
-And modify `vTaskDelayUntilNextPeriod` to use it when stack sharing is enabled:
-```c
-#if ( configSRP_STACK_SHARING == 1 )
-void vTaskDelayUntilNextPeriod( void )
-{
-    TCB_t * pxTCBLocal = pxCurrentTCB;
-    pxTCBLocal->xAbsoluteDeadline += pxTCBLocal->xPeriod;
-
-    /* Use TCB-stored wake time instead of a local variable. */
-    TickType_t xWake = pxTCBLocal->xSavedWakeTime;
-    vTaskDelayUntil( &xWake, pxTCBLocal->xPeriod );
-    pxTCBLocal->xSavedWakeTime = xWake;
+    return xReturn;
 }
-#endif
 ```
 
-**File:** `task.h` -- declare:
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 ) && ( configUSE_SRP == 1 ) && ( configSRP_STACK_SHARING == 1 )
-    BaseType_t xTaskCreateEDFWithSharedStack(
-        TaskFunction_t pxTaskCode,
-        const char * const pcName,
-        const configSTACK_DEPTH_TYPE uxStackDepth,
-        void * const pvParameters,
-        TickType_t xPeriod,
-        TickType_t xRelativeDeadline,
-        UBaseType_t uxPreemptionLevel,
-        TaskHandle_t * const pxCreatedTask
-    );
-#endif
-```
+Because `xTaskCreateEDF` can be called while running, this automatically supports **runtime admission** with SRP-aware analysis.
 
-#### Step 9: Admission Control with Blocking Times (EDF + SRP)
+#### Step 10: Keep SRP Gate in Both Preemption and Scheduler Pick
 
-The instructor requires: _"extend the admission control tests to include blocking times and test schedulability using EDF + SRP."_
-
-Under EDF + SRP, a task set is schedulable if for all deadlines D in the task set:
-
-```
-For all L = D_i (each task's relative deadline):
-    sum over tasks with D_i <= L of:
-        floor((L + T_i - D_i) / T_i) * C_i   +   max blocking B_i   <=   L
-```
-
-Where `B_i` is the worst-case blocking time for task i under SRP. This is the longest critical section of any task with a **lower** preemption level that uses a semaphore with ceiling >= task i's preemption level.
-
-**File:** `tasks.c`:
-```c
-#if ( configUSE_EDF_SCHEDULING == 1 ) && ( configUSE_SRP == 1 )
-
-    /* Check if the task set is schedulable under EDF + SRP.
-     * This uses the processor demand test with blocking times.
-     * Returns pdTRUE if schedulable, pdFALSE otherwise. */
-    BaseType_t xSRPAdmissionControl( void )
-    {
-        /* You will need to iterate over all tasks and compute:
-         *
-         * 1. For each task i, compute its worst-case blocking time B_i:
-         *    B_i = max over all semaphores S where ceiling(S) >= pi_i
-         *           of the longest critical section among tasks with
-         *           preemption level < pi_i that use S.
-         *
-         * 2. For each task i with deadline D_i, check the processor
-         *    demand criterion:
-         *    sum_j [ floor((D_i + T_j - D_j) / T_j) * C_j ] + B_i <= D_i
-         *    for all tasks j with D_j <= D_i.
-         *
-         * The WCET (C_i) and critical section lengths need to be
-         * provided by the application. You can add these as new TCB
-         * fields (e.g., xWCET, xMaxCriticalSection) or pass them as
-         * parameters.
-         *
-         * Design choice: how to provide critical section lengths to
-         * the scheduler is up to you (instructor's note). Options:
-         *   a) New fields in the TCB set at task creation.
-         *   b) A separate configuration table.
-         *   c) Parameters to xTaskCreateEDF.
-         */
-
-        /* Placeholder -- implement the full test as described above. */
-        return pdTRUE;
-    }
-
-#endif
-```
-
-**Note:** The instructor says _"it is up to you to decide how the worst-case estimates of the lengths of the critical sections are given to the scheduler."_ Add a `xWCET` field to the TCB and an additional parameter to `xTaskCreateEDF` (or a setter function) for the worst-case execution time.
-
-#### Step 10: Stack Usage Reporting
-
-**File:** `tasks.c`:
-```c
-#if ( configUSE_SRP == 1 ) && ( configSRP_STACK_SHARING == 1 )
-
-    void vSRPReportStackUsage( void )
-    {
-        UBaseType_t i;
-        size_t xWithSharing = 0;
-
-        printf( "=== SRP Stack Sharing Report ===\n" );
-
-        for( i = 0; i < configMAX_PREEMPTION_LEVELS; i++ )
-        {
-            if( xSharedStackTable[ i ].xInUse == pdTRUE )
-            {
-                printf( "  Preemption level %u: %u tasks sharing %u words\n",
-                    ( unsigned ) xSharedStackTable[ i ].uxPreemptionLevel,
-                    ( unsigned ) xSharedStackTable[ i ].uxTaskCount,
-                    ( unsigned ) xSharedStackTable[ i ].uxMaxStackDepth );
-
-                xWithSharing += ( size_t ) xSharedStackTable[ i ].uxMaxStackDepth
-                                * sizeof( StackType_t );
-            }
-        }
-
-        printf( "\n  Without sharing: %u bytes (each task gets its own stack)\n",
-                ( unsigned ) xTotalStackWithoutSharing );
-        printf( "  With sharing:    %u bytes (one stack per preemption level)\n",
-                ( unsigned ) xWithSharing );
-
-        if( xTotalStackWithoutSharing > 0 )
-        {
-            printf( "  Savings:         %u bytes (%.1f%%)\n",
-                ( unsigned ) ( xTotalStackWithoutSharing - xWithSharing ),
-                100.0 * ( double ) ( xTotalStackWithoutSharing - xWithSharing )
-                    / ( double ) xTotalStackWithoutSharing );
-        }
-
-        printf( "================================\n" );
-    }
-
-#endif
-```
-
-**File:** `task.h`:
-```c
-#if ( configUSE_SRP == 1 ) && ( configSRP_STACK_SHARING == 1 )
-    void vSRPReportStackUsage( void );
-#endif
-```
-
-#### Step 11: Test Application
-
-This test demonstrates dynamic ceilings with a counting resource. Resource R1 has 3 units. Three tasks use it with different unit requirements.
+In `xTaskIncrementTick()` (or equivalent wake-up path), keep:
 
 ```c
-#include "FreeRTOS.h"
-#include "task.h"
-#include "semphr.h"
-#include "pico/stdlib.h"
-#include <stdio.h>
-
-#define LED_A  2
-#define LED_B  3
-#define LED_C  4
-
-/* Counting resource with 3 units. */
-SemaphoreHandle_t xResource1;
-
-TaskHandle_t xTaskAHandle, xTaskBHandle, xTaskCHandle;
-
-/* Task A (highest preemption level 10): needs 1 unit of R1. */
-void vTaskA( void * p )
+if( pxTCB->uxPreemptionLevel > uxSystemCeiling )
 {
-    TickType_t xLastWake = xTaskGetTickCount();
-    for( ;; )
-    {
-        gpio_put( LED_A, 1 );
-
-        /* Take 1 unit. Under SRP, this should NEVER block.
-         * When Task A is allowed to run, >=1 unit is guaranteed free. */
-        xSRPResourceTake( xResource1, 1 );
-
-        /* Simulate short critical section (10ms). */
-        TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 10 ) ) { }
-
-        vSRPResourceGive( xResource1, 1 );
-
-        gpio_put( LED_A, 0 );
-        vTaskDelayUntil( &xLastWake, pdMS_TO_TICKS( 500 ) );
-    }
+    /* Existing EDF deadline comparison logic from Section 5 */
 }
-
-/* Task B (medium preemption level 5): needs 2 units of R1. */
-void vTaskB( void * p )
+else
 {
-    TickType_t xLastWake = xTaskGetTickCount();
-    for( ;; )
-    {
-        gpio_put( LED_B, 1 );
-
-        /* Take 2 units at once. */
-        xSRPResourceTake( xResource1, 2 );
-
-        /* Simulate critical section (30ms). */
-        TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 30 ) ) { }
-
-        vSRPResourceGive( xResource1, 2 );
-
-        gpio_put( LED_B, 0 );
-        vTaskDelayUntil( &xLastWake, pdMS_TO_TICKS( 800 ) );
-    }
-}
-
-/* Task C (lowest preemption level 2): needs 1 unit of R1. */
-void vTaskC( void * p )
-{
-    TickType_t xLastWake = xTaskGetTickCount();
-    for( ;; )
-    {
-        gpio_put( LED_C, 1 );
-
-        xSRPResourceTake( xResource1, 1 );
-
-        /* Simulate longer critical section (50ms). */
-        TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 50 ) ) { }
-
-        vSRPResourceGive( xResource1, 1 );
-
-        gpio_put( LED_C, 0 );
-        vTaskDelayUntil( &xLastWake, pdMS_TO_TICKS( 1000 ) );
-    }
-}
-
-void main_srp_test( void )
-{
-    stdio_init_all();
-    gpio_init( LED_A ); gpio_set_dir( LED_A, GPIO_OUT );
-    gpio_init( LED_B ); gpio_set_dir( LED_B, GPIO_OUT );
-    gpio_init( LED_C ); gpio_set_dir( LED_C, GPIO_OUT );
-
-    /* Create a counting resource with 3 units. */
-    xResource1 = xSRPResourceCreate( 3 );
-
-    /* Register which tasks use R1 and how many units each needs.
-     * This MUST be done before the scheduler starts. */
-    vSRPResourceRegisterUser( xResource1, 10, 1 );  /* Task A: level 10, needs 1 */
-    vSRPResourceRegisterUser( xResource1, 5,  2 );  /* Task B: level 5,  needs 2 */
-    vSRPResourceRegisterUser( xResource1, 2,  1 );  /* Task C: level 2,  needs 1 */
-
-    /* Create tasks. */
-    xTaskCreate( vTaskA, "A", 256, NULL, 3, &xTaskAHandle );
-    xTaskCreate( vTaskB, "B", 256, NULL, 2, &xTaskBHandle );
-    xTaskCreate( vTaskC, "C", 256, NULL, 1, &xTaskCHandle );
-
-    /* Assign preemption levels. */
-    vTaskSetPreemptionLevel( xTaskAHandle, 10 );  /* Highest */
-    vTaskSetPreemptionLevel( xTaskBHandle, 5 );   /* Medium */
-    vTaskSetPreemptionLevel( xTaskCHandle, 2 );   /* Lowest */
-
-    /* Print stack usage report (for quantitative study). */
-    #if ( configSRP_STACK_SHARING == 1 )
-        vSRPReportStackUsage();
+    #if ( configEDF_TRACE_ENABLE == 1 )
+    configPRINTF(("[SRP][BLOCK] task=%s level=%u ceiling=%u\r\n",
+                  pcTaskGetName( ( TaskHandle_t ) pxTCB ),
+                  ( unsigned ) pxTCB->uxPreemptionLevel,
+                  ( unsigned ) uxSystemCeiling ));
     #endif
-
-    vTaskStartScheduler();
-    for( ;; ) { }
 }
 ```
 
-**What to verify with the counting resource:**
+In `taskSELECT_HIGHEST_PRIORITY_TASK()` for EDF mode, skip ready tasks that fail SRP gate (`level <= ceiling`).
 
-```
-Scenario: Task C takes 1 unit first, then Task B arrives.
+#### Step 11: Keep Deadline-Miss Drop Policy, Add SRP Context in Logs
 
-1. All 3 units available. System ceiling = 0.
-2. Task C runs, takes 1 unit. Available = 2.
-   Ceiling: A needs 1 (2>=1 ok), B needs 2 (2>=2 ok), C needs 1 (2>=1 ok).
-   → ceiling = 0. System ceiling = 0.
-3. Task B preempts (level 5 > ceiling 0). Takes 2 units. Available = 0.
-   Ceiling: A needs 1 (0<1 BLOCKED, lv10), B needs 2 (0<2, lv5), C needs 1 (0<1, lv2).
-   → ceiling = 10. System ceiling = 10.
-4. Task A arrives (level 10). Can A preempt? 10 > 10? NO.
-   Correct! Only 0 units left and A needs 1.
-5. Task B gives 2 units. Available = 2.
-   Ceiling: A needs 1 (2>=1 ok), B needs 2 (2>=2 ok), C needs 1 (2>=1 ok).
-   → ceiling = 0. System ceiling = 0.
-6. Task A preempts (10 > 0). Takes 1 unit. Available = 1.
-   Ceiling: A needs 1 (1>=1 ok), B needs 2 (1<2 BLOCKED, lv5), C needs 1 (1>=1 ok).
-   → ceiling = 5.
-   Task B cannot preempt A (5 > 5? NO). ✓
+Do not change your late-drop policy. Just make logs richer:
+
+```c
+#if ( configEDF_TRACE_ENABLE == 1 )
+configPRINTF(("[DROP] task=%s now=%u abs=%u level=%u sysceil=%u\r\n",
+              pcTaskGetName( ( TaskHandle_t ) pxCurrentTCB ),
+              ( unsigned ) xTickCount,
+              ( unsigned ) pxCurrentTCB->xAbsoluteDeadline,
+              ( unsigned ) pxCurrentTCB->uxPreemptionLevel,
+              ( unsigned ) uxSystemCeiling ));
+#endif
 ```
 
-- **Stack sharing test (100 tasks):** For the quantitative study, create 100 tasks across a few preemption levels and call `vSRPReportStackUsage()` before starting the scheduler.
+This preserves behavior while improving diagnosis.
 
-### 6.6 Summary of All Changes for SRP
+#### Step 12: Trace Events You Must Print
+
+To match your updated EDF requirement, include:
+
+1. Task table before scheduler start (`T,D,C,B,level`).
+2. New task create request (boot/runtime).
+3. Admission result + reason + admission path.
+4. Job release.
+5. Job finish.
+6. Preempt event.
+7. Resume event.
+8. Late drop event.
+9. SRP resource take/give (units + availability + system ceiling).
+10. SRP block-at-dispatch (`level <= system_ceiling`).
+
+A consistent prefix scheme helps grading and debugging:
+
+```text
+[TASK_TABLE]
+[ADM][IMPLICIT][PASS/FAIL]
+[ADM][CONSTR][PASS/FAIL]
+[SRP] TAKE
+[SRP] GIVE
+[SRP][BLOCK]
+[JOB][RELEASE]
+[JOB][FINISH]
+[PREEMPT]
+[RESUME]
+[DROP]
+```
+
+#### Step 13: Stack Sharing (If Enabled)
+
+Keep your existing stack-sharing algorithm and add/keep these notes:
+
+```c
+/* SRP stack-sharing rule:
+ * Tasks at same preemption level do not execute concurrently under SRP,
+ * so one physical stack may be shared.
+ * Persistent state must live in TCB/global data (not local stack). */
+```
+
+For periodic EDF helper, preserve Section 5 behavior and ensure persistent wake metadata is safe under shared stack mode.
+
+#### Step 14: Required Test Scenarios for SRP+EDF
+
+Your SRP tests should now include these scenarios explicitly:
+
+1. Accepted boot-time EDF+SRP task set.
+2. Rejected boot-time EDF+SRP task set.
+3. Runtime accepted task insertion.
+4. Runtime rejected task insertion.
+5. SRP blocks an otherwise-ready task due to `level <= ceiling`.
+6. Late job is dropped under overload.
+7. At least one constrained-deadline (`D<T`) case uses constrained path.
+8. At least one implicit-deadline (`D=T`) case uses implicit path.
+
+### 6.6 Common Integration Bugs (and How to Avoid Them)
+
+1. **Admission ignores `B` for runtime-created task.**
+   - Fix: compute candidate `B` inside every `xTaskCreateEDF` call.
+
+2. **SRP gate in tick path only, not in task-pick path.**
+   - Fix: apply gate in both places.
+
+3. **Idle task edge case breaks EDF comparison.**
+   - Fix: keep your guard for non-EDF current task (`xPeriod == 0`).
+
+4. **System ceiling not recomputed after every take/give.**
+   - Fix: always recalculate in the same critical section as unit update.
+
+5. **Trace says admitted but task creation failed later.**
+   - Fix: log final status after both admission + create path finalize.
+
+6. **Stack-sharing tasks keep state in locals.**
+   - Fix: move persistent state to TCB/global storage.
+
+### 6.7 Summary of All Changes for SRP (Updated)
 
 | File | Change |
 |------|--------|
-| `tasks.c` | Add `uxPreemptionLevel` to TCB |
-| `tasks.c` | Add `xSavedWakeTime` to TCB (for stack sharing) |
-| `tasks.c` | Add `uxSystemCeiling` global |
-| `tasks.c` | Add `SRPResourceUser_t`, `SRPResourceEntry_t` structs and `xSRPResources[]` registry |
-| `tasks.c` | Add `prvComputeResourceCeiling()`, `prvRecalculateSystemCeiling()`, `prvFindResource()` |
-| `tasks.c` | Implement `xSRPResourceCreate()`, `vSRPResourceRegisterUser()` |
-| `tasks.c` | Implement `xSRPResourceTake()`, `vSRPResourceGive()` (with dynamic ceiling recomputation) |
-| `tasks.c` | Add `SharedStackEntry_t xSharedStackTable[]`, `xTotalStackWithoutSharing` globals |
-| `tasks.c` | Add `prvGetOrCreateSharedStack()` for shared stack allocation |
-| `tasks.c` | Modify preemption checks in `xTaskIncrementTick` (add SRP gate + idle task fix) |
-| `tasks.c` | Modify `taskSELECT_HIGHEST_PRIORITY_TASK` (skip tasks blocked by SRP) |
-| `tasks.c` | Implement `vTaskSetPreemptionLevel` and `uxTaskGetPreemptionLevel` |
-| `tasks.c` | Implement `xTaskCreateEDFWithSharedStack()` |
-| `tasks.c` | Implement `vSRPReportStackUsage()` |
-| `tasks.c` | Implement `xSRPAdmissionControl()` (processor demand + blocking times) |
-| `task.h` | Declare SRP resource API (`xSRPResourceCreate`, `vSRPResourceRegisterUser`, `xSRPResourceTake`, `vSRPResourceGive`) |
-| `task.h` | Declare preemption level API, shared-stack creation, stack reporting |
-| `FreeRTOS.h` | Add `configUSE_SRP`, `configSRP_STACK_SHARING`, `configMAX_SRP_RESOURCES`, `configMAX_RESOURCE_USERS` defaults |
-| `FreeRTOSConfig.h` | Enable `configUSE_SRP` and `configSRP_STACK_SHARING` |
-| Demo test file | Test SRP with counting resources, dynamic ceilings, stack sharing, report savings |
+| `tasks.c` | Keep dynamic-ceiling multi-unit SRP implementation unchanged in algorithm |
+| `tasks.c` | Keep SRP gate in preemption and EDF task selection |
+| `tasks.c` | Extend admission candidate with SRP blocking bound `B` |
+| `tasks.c` | Update implicit admission to use `(C+B)/T` |
+| `tasks.c` | Update constrained admission DBF test to include blocking term |
+| `tasks.c` | Ensure `xTaskCreateEDF` performs SRP-aware admission for boot/runtime creation |
+| `tasks.c` | Keep late-drop behavior; add SRP context to trace logs |
+| `tasks.c` | Add SRP trace events for take/give and SRP dispatch blocking |
+| `tasks.c` | Keep stack-sharing rules and persistent-state handling (if enabled) |
+| `task.h` | Keep/extend SRP API declarations and related metadata APIs |
+| `FreeRTOS.h` | Keep SRP feature defaults |
+| `FreeRTOSConfig.h` | Enable EDF+SRP+trace for SRP test builds |
+
+### 6.8 End-of-Section Checklist (Task 2 Complete When All True)
+
+- SRP algorithm behavior (dynamic ceiling, multi-unit resources, per-task unit demand) is preserved.
+- EDF admission includes SRP blocking in both implicit and constrained paths.
+- Runtime `xTaskCreateEDF` admission/rejection works with SRP enabled.
+- Scheduler only dispatches tasks satisfying SRP gate (`level > system ceiling`).
+- Late-job drop policy still works and logs SRP context.
+- Trace output includes admission, release, finish, preempt, resume, drop, and SRP resource events.
+- Stack-sharing constraints are documented and respected if that mode is enabled.
+
+### 6.9 SRP Normal Test Script + Logic Analyzer Setup
+
+Use this exact test flow for a clean SRP validation run on the RP2040 demo target.
+
+#### Test goal
+
+Validate all baseline SRP behaviors in one run:
+1. EDF+SRP boot-time admission.
+2. Runtime EDF task admission (one accepted, one rejected).
+3. SRP resource take/give with dynamic system ceiling updates.
+4. SRP dispatch blocking (`level <= system ceiling`).
+5. Trace visibility for scheduling/resource events.
+
+#### Expected GPIO channels in this test
+
+- `GPIO10`: low-level SRP task (`SRP_LOW`)
+- `GPIO11`: high-level SRP task (`SRP_HIGH`)
+- `GPIO12`: background EDF task (`SRP_BG`)
+- `GPIO13`: runtime-admitted EDF task (`RT_OK`)
+
+#### PowerShell test script (copy/paste)
+
+```powershell
+# Run from workspace root: Raspberry_pico
+Set-Location .\FreeRTOS\FreeRTOS\Demo\ThirdParty\Community-Supported-Demos\CORTEX_M0+_RP2040\Standard
+
+# Configure and build EDF+SRP test target
+cmake -S . -B .\build -G "Ninja" -DPICO_BOARD=pico
+cmake --build .\build --target main_edf_test
+
+# Flash (pick one method)
+# Method A: copy UF2 when Pico is mounted as RPI-RP2
+Copy-Item .\build\main_edf_test.uf2 E:\
+
+# Method B (if picotool is installed and device is in BOOTSEL)
+# picotool load .\build\main_edf_test.uf2 -f
+
+# Serial monitor (pick one tool)
+# screen / PuTTY / VS Code serial monitor at 115200 baud
+```
+
+#### Logic analyzer wiring setup
+
+1. Connect analyzer GND to Pico GND.
+2. Connect digital channels:
+    - CH0 -> GPIO10
+    - CH1 -> GPIO11
+    - CH2 -> GPIO12
+    - CH3 -> GPIO13
+3. Recommended analyzer settings:
+    - Sample rate: `>= 1 MHz`
+    - Voltage threshold: `3.3V logic`
+    - Capture duration: `>= 20 s`
+4. Trigger suggestion:
+    - Rising edge on CH1 (high-level task) or CH3 (runtime-admitted task).
+
+#### What you should observe
+
+- `GPIO10` and `GPIO11` both pulse periodically, but `GPIO11` can be delayed while low task holds SRP resource (with matching `[SRP][BLOCK]` trace lines).
+- `GPIO13` remains low until runtime creator adds `RT_OK`; then it starts periodic pulses.
+- Serial logs should include:
+  - `[SRP] TAKE` / `[SRP] GIVE`
+  - `[SRP][BLOCK]`
+  - `[EDF][admission] ... ACCEPT/REJECT`
+  - runtime add summary (`add_ok` and `add_reject`)
+
+If all observations match, your normal SRP integration test is passing.
 
 ---
 

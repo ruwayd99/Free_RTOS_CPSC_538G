@@ -95,9 +95,13 @@
 
 /* FreeRTOS CPSC_538G related configs*/
 #define configUSE_EDF_SCHEDULING    1
+#define configEDF_TRACE_ENABLE      1
+#define configPRINTF( x )           printf x
 
 /* FreeRTOS CPSC_538G related configs*/
 #define configUSE_SRP    1    /* Enable Stack Resource Policy */
+#define configMAX_SRP_RESOURCES 8
+#define configMAX_SRP_USERS_PER_RESOURCE 16
 
 /* Interrupt nesting behaviour configuration. */
 /*
@@ -141,4 +145,3 @@ to exclude the API function. */
 /* A header file that defines trace macro can be included here. */
 
 #endif /* FREERTOS_CONFIG_H */
-
