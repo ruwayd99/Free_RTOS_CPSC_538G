@@ -2926,10 +2926,8 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
              *    allowing periodic tasks with earlier deadlines to run.
              *
              * 2. Replenish the budget back to Q_s (full).
-             *    The task gets a fresh allocation.
-             *
-             * 3. Re-sort the task in the EDF ready list with the
-             *    new (later) deadline, and force a reschedule. */
+             * 3. IF the task is in the ready list, re-sort it with
+             *    the new deadline. */
 
             /* 1. Postpone deadline. */
             pxCurrentTCB->xCBSDeadline += pxCurrentTCB->xCBSPeriod;
@@ -2938,12 +2936,19 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
             /* 2. Replenish budget. */
             pxCurrentTCB->xCBSCurrentBudget = pxCurrentTCB->xCBSMaxBudget;
 
-            /* 3. Re-insert into the EDF ready list with the new deadline.
-             *    Remove from current position, update sort key, re-insert. */
-            ( void ) uxListRemove( &( pxCurrentTCB->xStateListItem ) );
-            listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ),
-                                     pxCurrentTCB->xAbsoluteDeadline );
-            vListInsert( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) );
+            /* 3. Re-insert ONLY if it is actually in the EDF ready list.
+             *    (It might be in a delayed list if we are processing pended
+             *    ticks after a vTaskDelay/QueueBlock call!) */
+            if( listIS_CONTAINED_WITHIN( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) ) != pdFALSE )
+            {
+                ( void ) uxListRemove( &( pxCurrentTCB->xStateListItem ) );
+                
+                /* Apply CBS tie-breaking when re-inserting */
+                TickType_t xSortKey = pxCurrentTCB->xAbsoluteDeadline;
+                if( xSortKey > 0 ) { xSortKey--; }
+                listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ), xSortKey );
+                vListInsert( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) );
+            }
 
             /* Force a context switch so the scheduler re-evaluates
              * who should run next (a periodic task might now have
@@ -2975,10 +2980,11 @@ When an aperiodic event occurs (e.g., button press) and the CBS task transitions
          * Otherwise, check if current_budget >= (server_deadline - current_time) * (Q_s / T_s).
          * To avoid floating point math, we re-arrange the inequality:
          * c * T_s >= (d - a) * Q_s
+         * Cast to uint64_t to prevent 32-bit arithmetic overflows!
          */
         if( ( xCurrentTime >= pxTCB->xCBSDeadline ) ||
-            ( ( pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod ) >= 
-              ( ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget ) ) )
+            ( ( ( uint64_t ) pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod ) >= 
+              ( ( uint64_t ) ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget ) ) )
         {
             /* Bandwidth check failed or deadline passed while the task was
              * sleeping. Assign a fresh deadline and full budget.
@@ -3041,10 +3047,7 @@ The instructor requires: _"priority ties are always broken in favor of the serve
 
 ```c
 /* When re-inserting after budget exhaustion, use xSortKey - 1 for CBS. */
-TickType_t xSortKey = pxCurrentTCB->xAbsoluteDeadline;
-if( xSortKey > 0 ) xSortKey--;
-listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ), xSortKey );
-vListInsert( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) );
+/* Included in Step 4 above via listIS_CONTAINED_WITHIN check! */
 ```
 
 #### Step 7: Test Application
