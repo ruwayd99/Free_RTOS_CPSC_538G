@@ -98,6 +98,10 @@
 #define configEDF_TRACE_ENABLE      1
 #define configPRINTF( x )           printf x
 
+/* Begin FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
+#define configUSE_CBS    1    /* Enable Constant Bandwidth Server */
+/* End FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
+
 /* FreeRTOS CPSC_538G related configs*/
 #define configUSE_SRP    1    /* Enable Stack Resource Policy */
 #define configMAX_SRP_RESOURCES 8

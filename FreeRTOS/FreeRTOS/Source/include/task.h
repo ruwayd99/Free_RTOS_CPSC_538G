@@ -3839,6 +3839,35 @@ void vTaskInternalSetTimeOutState( TimeOut_t * const pxTimeOut ) PRIVILEGED_FUNC
 
 #endif /* #if ( ( portUSING_MPU_WRAPPERS == 1 ) && ( configUSE_MPU_WRAPPERS_V1 == 0 ) && ( configENABLE_ACCESS_CONTROL_LIST == 1 ) ) */
 
+/* Begin FreeRTOS CPSC_538G related - CBS - Add CBS task creation API */
+#if ( configUSE_CBS == 1 )
+    /* Create an aperiodic task managed by a Constant Bandwidth Server.
+     *
+     * pxTaskCode:      The task function (same as xTaskCreate).
+     * pcName:          Task name for debugging.
+     * uxStackDepth:    Stack size in words.
+     * pvParameters:    Parameters to pass to the task function.
+     * xServerBudget:   Q_s -- max CPU ticks per server period.
+     * xServerPeriod:   T_s -- the server's replenishment period.
+     * pxCreatedTask:   Output: handle to the created task (or NULL).
+     *
+     * Bandwidth = xServerBudget / xServerPeriod.
+     * Example: xServerBudget=20, xServerPeriod=100 → 20% of CPU.
+     *
+     * The total bandwidth of all CBS servers plus all periodic tasks
+     * must be <= 1.0 (100%) for EDF schedulability to hold. */
+    BaseType_t xTaskCreateCBS(
+        TaskFunction_t pxTaskCode,
+        const char * const pcName,
+        const configSTACK_DEPTH_TYPE uxStackDepth,
+        void * const pvParameters,
+        TickType_t xServerBudget,
+        TickType_t xServerPeriod,
+        TaskHandle_t * const pxCreatedTask
+    );
+#endif
+/* End FreeRTOS CPSC_538G related - CBS - Add CBS task creation API */
+
 /* *INDENT-OFF* */
 #ifdef __cplusplus
     }
