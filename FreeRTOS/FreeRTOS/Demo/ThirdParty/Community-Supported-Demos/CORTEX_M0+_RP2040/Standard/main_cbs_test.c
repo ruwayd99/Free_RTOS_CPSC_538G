@@ -37,7 +37,7 @@ static void vPeriodicTask(void *pvParameters)
     for (;;)
     {
         gpio_put(pin, 1);
-        printf("[%s] tick %lu running\n", name, (unsigned long)xTaskGetTickCount());
+        printf("[CBS TEST] [%s] tick %lu running\n", name, (unsigned long)xTaskGetTickCount());
         prvBusyWait(pdMS_TO_TICKS(PERIODIC_WCET_MS));
         gpio_put(pin, 0);
         vTaskDelayUntilNextPeriod(&xLastWake);
@@ -52,7 +52,7 @@ static void vCBSAperiodicTask(void *pvParameters)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         gpio_put(PIN_CBS_TASK, 1);
-        printf("[CBS] tick %lu running\n", (unsigned long)xTaskGetTickCount());
+        printf("[CBS TEST] [CBS] tick %lu running\n", (unsigned long)xTaskGetTickCount());
         prvBusyWait(pdMS_TO_TICKS(120)); // Simulate aperiodic work (less than CBS budget)
         gpio_put(PIN_CBS_TASK, 0);
     }
@@ -66,6 +66,7 @@ static void vCBSTriggerTask(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(700)); // Trigger CBS roughly every 700ms
         if (xCBSTaskHandle)
         {
+            printf("[CBS TEST] [CBS] tick %lu tiggering CBS task\n", (unsigned long)xTaskGetTickCount());
             xTaskNotifyGive(xCBSTaskHandle);
         }
     }
