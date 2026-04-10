@@ -2935,15 +2935,17 @@ If you give aperiodic tasks a high priority/early deadline, they could steal CPU
 
 CBS manages a **virtual deadline** and a **budget counter** for the aperiodic task:
 
-**Rule 1: When a new aperiodic job arrives (task becomes ready):**
+**Rule 1: When a new aperiodic job arrives (task becomes ready) and the server is idle:**
 ```
-if budget is exhausted OR the current deadline has already passed:
-    Start fresh:
-    server_deadline = current_time + T_s     (new deadline = now + period)
-    current_budget = Q_s                      (full budget)
-else:
-    Keep the existing deadline and remaining budget.
-    (The task can use whatever budget is left from the last job.)
+Check if the remaining budget is disproportionately large compared to the time left until the deadline (the "bandwidth check").
+    Let U_s = (Q_s / T_s).
+    If current_budget >= (server_deadline - current_time) * U_s:
+        Start fresh (generate new deadline and recharge budget):
+        server_deadline = current_time + T_s
+        current_budget = Q_s
+    Else:
+        Keep the existing deadline and remaining budget.
+        (The task can safely use its leftover budget without exceeding allocated bandwidth.)
 ```
 
 **Rule 2: Every tick the aperiodic task is running:**
@@ -2960,7 +2962,7 @@ Force a reschedule.                         (EDF may pick a different task now)
 
 When the deadline is pushed forward, the task's EDF priority effectively drops. Periodic tasks with earlier deadlines get to run. The aperiodic task will run again later when its new deadline becomes the earliest.
 
-#### CBS Walkthrough
+#### CBS Walkthrough (Demonstrating the Bandwidth Check)
 
 ```
 Setup:
@@ -2969,12 +2971,19 @@ Setup:
 
 Time 0:
   P starts. P's deadline = 100. A is idle (no aperiodic work yet).
+  (A's initial server deadline is 100, budget is 20).
   EDF ready list: [P dl:100]
   P runs.
 
 Time 20:
-  An aperiodic job arrives for A! Budget is full (Q_s=20), no old deadline.
-  CBS assigns: A's deadline = 20 + 100 = 120. Budget = 20.
+  An aperiodic job arrives for A! Task A wakes up.
+  CBS performs the bandwidth check: 
+    Is current_budget >= (server_deadline - current_time) * U_s ?
+    Is 20 >= (100 - 20) * (20/100) ? 
+    Is 20 >= 16 ?  YES!
+  Since leftover budget is disproportionately large, keeping it would allow A to exceed its 20% bandwidth before its old deadline.
+  CBS starts a fresh cycle (Rule 1):
+    A's new deadline = 20 + 100 = 120. Budget recharged = 20.
   EDF ready list: [P dl:100] → [A dl:120]
   P has earlier deadline, P keeps running.
 
@@ -3200,10 +3209,8 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
              *    allowing periodic tasks with earlier deadlines to run.
              *
              * 2. Replenish the budget back to Q_s (full).
-             *    The task gets a fresh allocation.
-             *
-             * 3. Re-sort the task in the EDF ready list with the
-             *    new (later) deadline, and force a reschedule. */
+             * 3. IF the task is in the ready list, re-sort it with
+             *    the new deadline. */
 
             /* 1. Postpone deadline. */
             pxCurrentTCB->xCBSDeadline += pxCurrentTCB->xCBSPeriod;
@@ -3212,12 +3219,19 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
             /* 2. Replenish budget. */
             pxCurrentTCB->xCBSCurrentBudget = pxCurrentTCB->xCBSMaxBudget;
 
-            /* 3. Re-insert into the EDF ready list with the new deadline.
-             *    Remove from current position, update sort key, re-insert. */
-            ( void ) uxListRemove( &( pxCurrentTCB->xStateListItem ) );
-            listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ),
-                                     pxCurrentTCB->xAbsoluteDeadline );
-            vListInsert( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) );
+            /* 3. Re-insert ONLY if it is actually in the EDF ready list.
+             *    (It might be in a delayed list if we are processing pended
+             *    ticks after a vTaskDelay/QueueBlock call!) */
+            if( listIS_CONTAINED_WITHIN( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) ) != pdFALSE )
+            {
+                ( void ) uxListRemove( &( pxCurrentTCB->xStateListItem ) );
+                
+                /* Apply CBS tie-breaking when re-inserting */
+                TickType_t xSortKey = pxCurrentTCB->xAbsoluteDeadline;
+                if( xSortKey > 0 ) { xSortKey--; }
+                listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ), xSortKey );
+                vListInsert( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) );
+            }
 
             /* Force a context switch so the scheduler re-evaluates
              * who should run next (a periodic task might now have
@@ -3239,23 +3253,31 @@ When an aperiodic event occurs (e.g., button press) and the CBS task transitions
 ```c
 #if ( configUSE_CBS == 1 )
     /* CBS job arrival check: when a CBS task wakes up (becomes ready),
-     * check if its current budget and deadline are still valid. */
+     * check if its current budget and deadline are still valid using the
+     * correct CBS bandwidth equation: c >= (d - a) * U */
     if( pxTCB->xIsCBSTask == pdTRUE )
     {
         TickType_t xCurrentTime = xTickCount;
 
-        if( ( pxTCB->xCBSCurrentBudget == 0 ) ||
-            ( xCurrentTime >= pxTCB->xCBSDeadline ) )
+        /* If deadline has passed, the difference (d-a) would be underflow/negative. 
+         * Otherwise, check if current_budget >= (server_deadline - current_time) * (Q_s / T_s).
+         * To avoid floating point math, we re-arrange the inequality:
+         * c * T_s >= (d - a) * Q_s
+         * Cast to uint64_t to prevent 32-bit arithmetic overflows!
+         */
+        if( ( xCurrentTime >= pxTCB->xCBSDeadline ) ||
+            ( ( ( uint64_t ) pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod ) >= 
+              ( ( uint64_t ) ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget ) ) )
         {
-            /* Budget exhausted or deadline passed while the task was
+            /* Bandwidth check failed or deadline passed while the task was
              * sleeping. Assign a fresh deadline and full budget.
-             * This is like "starting a new billing cycle." */
+             * This prevents the server from exceeding its allocated bandwidth. */
             pxTCB->xCBSDeadline = xCurrentTime + pxTCB->xCBSPeriod;
             pxTCB->xCBSCurrentBudget = pxTCB->xCBSMaxBudget;
         }
-        /* else: the task still has budget left and the deadline hasn't
-         * passed. Keep the existing deadline and remaining budget.
-         * This is efficient -- the task can use leftover budget. */
+        /* else: the task still has budget left, the deadline hasn't passed,
+         * and the bandwidth check passes. Keep the existing deadline and 
+         * remaining budget. This is efficient -- the task can use leftover budget safely. */
 
         /* Update the EDF deadline to match the CBS deadline. */
         pxTCB->xAbsoluteDeadline = pxTCB->xCBSDeadline;
@@ -3308,10 +3330,7 @@ The instructor requires: _"priority ties are always broken in favor of the serve
 
 ```c
 /* When re-inserting after budget exhaustion, use xSortKey - 1 for CBS. */
-TickType_t xSortKey = pxCurrentTCB->xAbsoluteDeadline;
-if( xSortKey > 0 ) xSortKey--;
-listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ), xSortKey );
-vListInsert( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) );
+/* Included in Step 4 above via listIS_CONTAINED_WITHIN check! */
 ```
 
 #### Step 7: Test Application

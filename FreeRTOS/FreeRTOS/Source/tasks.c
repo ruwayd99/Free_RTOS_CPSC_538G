@@ -334,30 +334,35 @@
  * the task.  It is inserted at the end of the list.
  */
 #if ( configUSE_EDF_SCHEDULING == 1 )
+    /* Begin FreeRTOS CPSC_538G related - CBS - Add tie-breaking to ready list */
     #define prvAddTaskToReadyList( pxTCB )                                             \
     do {                                                                               \
         traceMOVED_TASK_TO_READY_STATE( pxTCB );                                       \
-        /* Check if this is an EDF task (has a period > 0) or a                        \
-         * non-EDF task (like Idle, which has period 0). */                             \
         if( ( pxTCB )->xPeriod > 0 )                                                   \
         {                                                                              \
-            /* EDF task: set xItemValue to the absolute deadline so                    \
-             * vListInsert will sort it in ascending deadline order.                    \
-             * The task with the smallest deadline ends up at the head. */              \
-            listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ),                   \
-                                     ( pxTCB )->xAbsoluteDeadline );                   \
+            TickType_t xSortKey = ( pxTCB )->xAbsoluteDeadline;                        \
+            /* CBS tie-breaking: if this is a CBS task, use deadline - 1              \
+             * as the sort key so it is placed BEFORE any periodic task               \
+             * with the same deadline. vListInsert sorts ascending, so               \
+             * a smaller value means earlier position in the list.                    \
+             * This implements the rule: "ties broken in favor of server." */          \
+            if( ( configUSE_CBS == 1 ) && ( ( pxTCB )->xIsCBSTask == pdTRUE ) &&       \
+                ( xSortKey > 0 ) )                                                     \
+            {                                                                          \
+                xSortKey--;                                                            \
+            }                                                                          \
+            listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ), xSortKey );       \
             vListInsert( &xEDFReadyList, &( ( pxTCB )->xStateListItem ) );             \
         }                                                                              \
         else                                                                           \
         {                                                                              \
-            /* Non-EDF task (Idle, Timer, etc.): use the original                      \
-             * priority-based ready list, exactly like standard FreeRTOS. */            \
             taskRECORD_READY_PRIORITY( ( pxTCB )->uxPriority );                        \
             listINSERT_END( &( pxReadyTasksLists[ ( pxTCB )->uxPriority ] ),           \
                             &( ( pxTCB )->xStateListItem ) );                          \
         }                                                                              \
         tracePOST_MOVED_TASK_TO_READY_STATE( pxTCB );                                  \
     } while( 0 )
+    /* End FreeRTOS CPSC_538G related - CBS - Add tie-breaking to ready list */
 #else
     /* Original FreeRTOS macro (unchanged when EDF is disabled). */
     #define prvAddTaskToReadyList( pxTCB )                                                                     \
@@ -476,6 +481,33 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
         UBaseType_t uxPreemptionLevel;
         UBaseType_t uxSRPHeldResources; /* Number of SRP resources currently held by task. */
     #endif
+
+    /* Begin FreeRTOS CPSC_538G related - CBS - Add CBS TCB fields */
+    #if ( configUSE_CBS == 1 )
+        /* pdTRUE if this task is an aperiodic task managed by a CBS.
+         * pdFALSE for regular periodic tasks. */
+        BaseType_t xIsCBSTask;
+
+        /* Q_s: Maximum budget per server period. This is the max number
+         * of ticks the CBS task can use before its deadline is postponed.
+         * Constant -- set at creation time, never changes. */
+        TickType_t xCBSMaxBudget;
+
+        /* Remaining budget. Starts at Q_s, decremented by 1 each tick
+         * the task runs. When it hits 0, the deadline is postponed and
+         * the budget is replenished back to Q_s. */
+        TickType_t xCBSCurrentBudget;
+
+        /* T_s: Server period. The deadline advances by this amount
+         * whenever the budget is exhausted. Constant -- set at creation. */
+        TickType_t xCBSPeriod;
+
+        /* The current virtual deadline managed by CBS. This value is
+         * used as the task's xAbsoluteDeadline for EDF scheduling.
+         * It gets pushed forward by T_s every time the budget runs out. */
+        TickType_t xCBSDeadline;
+    #endif
+    /* End FreeRTOS CPSC_538G related - CBS - Add CBS TCB fields */
     
     #if ( portUSING_MPU_WRAPPERS == 1 )
         xMPU_SETTINGS xMPUSettings; /**< The MPU settings are defined as part of the port layer.  THIS MUST BE THE SECOND MEMBER OF THE TCB STRUCT. */
@@ -5372,6 +5404,60 @@ BaseType_t xTaskIncrementTick( void )
             mtCOVERAGE_TEST_MARKER();
         }
 
+        /* Begin FreeRTOS CPSC_538G related - CBS - Add budget tracking in tick handler */
+        #if ( configUSE_CBS == 1 )
+            /* If the currently running task is a CBS task, decrement its budget. */
+            if( pxCurrentTCB->xIsCBSTask == pdTRUE )
+            {
+                if( pxCurrentTCB->xCBSCurrentBudget > 0 )
+                {
+                    /* Each tick the CBS task runs costs 1 unit of budget. */
+                    pxCurrentTCB->xCBSCurrentBudget--;
+                }
+
+                if( pxCurrentTCB->xCBSCurrentBudget == 0 )
+                {
+                    /* Budget exhausted! The CBS task has used up its
+                     * allocation for this period. Three things happen:
+                     *
+                     * 1. Postpone the deadline by one server period.
+                     *    This makes the task less urgent in EDF,
+                     *    allowing periodic tasks with earlier deadlines to run.
+                     *
+                     * 2. Replenish the budget back to Q_s (full).
+                     * 3. IF the task is in the ready list, re-sort it with
+                     *    the new deadline. */
+
+                    /* 1. Postpone deadline. */
+                    pxCurrentTCB->xCBSDeadline += pxCurrentTCB->xCBSPeriod;
+                    pxCurrentTCB->xAbsoluteDeadline = pxCurrentTCB->xCBSDeadline;
+
+                    /* 2. Replenish budget. */
+                    pxCurrentTCB->xCBSCurrentBudget = pxCurrentTCB->xCBSMaxBudget;
+
+                    /* 3. Re-insert ONLY if it is actually in the EDF ready list.
+                     *    (It might be in a delayed list if we are processing pended
+                     *    ticks after a vTaskDelay/QueueBlock call!) */
+                    if( listIS_CONTAINED_WITHIN( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) ) != pdFALSE )
+                    {
+                        ( void ) uxListRemove( &( pxCurrentTCB->xStateListItem ) );
+                        
+                        /* Apply CBS tie-breaking when re-inserting */
+                        TickType_t xSortKey = pxCurrentTCB->xAbsoluteDeadline;
+                        if( xSortKey > 0 ) { xSortKey--; }
+                        listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ), xSortKey );
+                        vListInsert( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) );
+                    }
+
+                    /* Force a context switch so the scheduler re-evaluates
+                     * who should run next (a periodic task might now have
+                     * an earlier deadline than the postponed CBS task). */
+                    xSwitchRequired = pdTRUE;
+                }
+            }
+        #endif
+        /* End FreeRTOS CPSC_538G related - CBS - Add budget tracking in tick handler */
+
         /* See if this tick has made a timeout expire.  Tasks are stored in
          * the  queue in the order of their wake time - meaning once one task
          * has been found whose block time has not expired there is no need to
@@ -5430,6 +5516,41 @@ BaseType_t xTaskIncrementTick( void )
                     {
                         mtCOVERAGE_TEST_MARKER();
                     }
+
+                    /* Begin FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
+                    #if ( configUSE_CBS == 1 )
+                        /* CBS job arrival check: when a CBS task wakes up (becomes ready),
+                         * check if its current budget and deadline are still valid using the
+                         * correct CBS bandwidth equation: c >= (d - a) * U */
+                        if( pxTCB->xIsCBSTask == pdTRUE )
+                        {
+                            TickType_t xCurrentTime = xTickCount;
+
+                            /* If deadline has passed, the difference (d-a) would be underflow/negative. 
+                             * Otherwise, check if current_budget >= (server_deadline - current_time) * (Q_s / T_s).
+                             * To avoid floating point math, we re-arrange the inequality:
+                             * c * T_s >= (d - a) * Q_s
+                             * Cast to uint64_t to prevent 32-bit arithmetic overflows!
+                             */
+                            if( ( xCurrentTime >= pxTCB->xCBSDeadline ) ||
+                                ( ( ( uint64_t ) pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod ) >= 
+                                  ( ( uint64_t ) ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget ) ) )
+                            {
+                                /* Bandwidth check failed or deadline passed while the task was
+                                 * sleeping. Assign a fresh deadline and full budget.
+                                 * This prevents the server from exceeding its allocated bandwidth. */
+                                pxTCB->xCBSDeadline = xCurrentTime + pxTCB->xCBSPeriod;
+                                pxTCB->xCBSCurrentBudget = pxTCB->xCBSMaxBudget;
+                            }
+                            /* else: the task still has budget left, the deadline hasn't passed,
+                             * and the bandwidth check passes. Keep the existing deadline and 
+                             * remaining budget. This is efficient -- the task can use leftover budget safely. */
+
+                            /* Update the EDF deadline to match the CBS deadline. */
+                            pxTCB->xAbsoluteDeadline = pxTCB->xCBSDeadline;
+                        }
+                    #endif
+                    /* End FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
 
                     /* Place the unblocked task into the appropriate ready
                      * list. */
@@ -6076,6 +6197,26 @@ BaseType_t xTaskRemoveFromEventList( const List_t * const pxEventList )
     pxUnblockedTCB = listGET_OWNER_OF_HEAD_ENTRY( pxEventList );
     configASSERT( pxUnblockedTCB );
     listREMOVE_ITEM( &( pxUnblockedTCB->xEventListItem ) );
+
+    /* Begin FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
+    #if ( configUSE_CBS == 1 )
+        /* CBS job arrival check */
+        if( pxUnblockedTCB->xIsCBSTask == pdTRUE )
+        {
+            TickType_t xCurrentTime = xTickCount;
+
+            if( ( xCurrentTime >= pxUnblockedTCB->xCBSDeadline ) ||
+                ( ( ( uint64_t ) pxUnblockedTCB->xCBSCurrentBudget * pxUnblockedTCB->xCBSPeriod ) >= 
+                  ( ( uint64_t ) ( pxUnblockedTCB->xCBSDeadline - xCurrentTime ) * pxUnblockedTCB->xCBSMaxBudget ) ) )
+            {
+                pxUnblockedTCB->xCBSDeadline = xCurrentTime + pxUnblockedTCB->xCBSPeriod;
+                pxUnblockedTCB->xCBSCurrentBudget = pxUnblockedTCB->xCBSMaxBudget;
+            }
+
+            pxUnblockedTCB->xAbsoluteDeadline = pxUnblockedTCB->xCBSDeadline;
+        }
+    #endif
+    /* End FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
 
     if( uxSchedulerSuspended == ( UBaseType_t ) 0U )
     {
@@ -9978,3 +10119,61 @@ void vTaskResetState( void )
     #endif /* #if ( configGENERATE_RUN_TIME_STATS == 1 ) */
 }
 /*-----------------------------------------------------------*/
+
+/* Begin FreeRTOS CPSC_538G related - CBS - Add CBS task creation */
+#if ( configUSE_CBS == 1 )
+BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
+                           const char * const pcName,
+                           const configSTACK_DEPTH_TYPE uxStackDepth,
+                           void * const pvParameters,
+                           TickType_t xServerBudget,
+                           TickType_t xServerPeriod,
+                           TaskHandle_t * const pxCreatedTask )
+{
+    TCB_t * pxNewTCB;
+    BaseType_t xReturn;
+
+    /* Create the task with a basic priority (above idle).
+     * Actual scheduling is done by EDF using the CBS deadline. */
+    pxNewTCB = prvCreateTask( pxTaskCode, pcName, uxStackDepth, pvParameters,
+                              tskIDLE_PRIORITY + 1, pxCreatedTask );
+
+    if( pxNewTCB != NULL )
+    {
+        /* Mark this task as a CBS-managed aperiodic task. */
+        pxNewTCB->xIsCBSTask = pdTRUE;
+
+        /* Set the server parameters (constant for the task's lifetime). */
+        pxNewTCB->xCBSMaxBudget = xServerBudget;
+        pxNewTCB->xCBSPeriod = xServerPeriod;
+
+        /* Initialize the budget to full. */
+        pxNewTCB->xCBSCurrentBudget = xServerBudget;
+
+        /* Set the initial CBS deadline. The first deadline is
+         * at time 0 + T_s = T_s. */
+        pxNewTCB->xCBSDeadline = xServerPeriod;
+
+        /* Set the EDF deadline to match the CBS deadline.
+         * This is what the EDF scheduler actually sorts by. */
+        pxNewTCB->xAbsoluteDeadline = xServerPeriod;
+
+        /* The CBS task needs a non-zero xPeriod so prvAddTaskToReadyList
+         * puts it in the EDF ready list (not the priority ready list).
+         * We use the CBS period for this. */
+        pxNewTCB->xPeriod = xServerPeriod;
+        pxNewTCB->xRelativeDeadline = xServerPeriod;
+
+        prvAddNewTaskToReadyList( pxNewTCB );
+        xReturn = pdPASS;
+    }
+    else
+    {
+        xReturn = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+    }
+
+    return xReturn;
+}
+#endif
+/* End FreeRTOS CPSC_538G related - CBS - Add CBS task creation */
+

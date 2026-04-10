@@ -76,6 +76,12 @@
     #define configEDF_TRACE_ENABLE    0
 #endif
 
+/* Begin FreeRTOS CPSC_538G related - CBS - Add CBS default config */
+#ifndef configUSE_CBS
+    #define configUSE_CBS    0
+#endif
+/* End FreeRTOS CPSC_538G related - CBS - Add CBS default config */
+
 /* FreeRTOS CPSC_538G related configs*/
 #ifndef configUSE_SRP
     #define configUSE_SRP    0
