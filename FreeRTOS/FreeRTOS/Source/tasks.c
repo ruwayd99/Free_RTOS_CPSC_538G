@@ -26,6 +26,7 @@
  * https://github.com/FreeRTOS
  *
  */
+#include "FreeRTOSConfig.h"
 
 /* Standard includes. */
 #include <stdlib.h>
@@ -774,6 +775,12 @@ static void prvInitialiseTaskLists( void ) PRIVILEGED_FUNCTION;
         #define srpTRACE( ... ) configPRINTF( ( __VA_ARGS__ ) )
     #else
         #define srpTRACE( ... )
+    #endif
+
+    #if ( ( configUSE_CBS == 1 ) && ( configEDF_TRACE_ENABLE == 1 ) )
+        #define cbsTRACE( ... ) configPRINTF( ( __VA_ARGS__ ) )
+    #else
+        #define cbsTRACE( ... )
     #endif
 
     /* Emit one-line admission result with enough detail for demo and debugging. */
@@ -5417,17 +5424,13 @@ BaseType_t xTaskIncrementTick( void )
 
                 if( pxCurrentTCB->xCBSCurrentBudget == 0 )
                 {
-                    /* Budget exhausted! The CBS task has used up its
-                     * allocation for this period. Three things happen:
-                     *
-                     * 1. Postpone the deadline by one server period.
-                     *    This makes the task less urgent in EDF,
-                     *    allowing periodic tasks with earlier deadlines to run.
-                     *
-                     * 2. Replenish the budget back to Q_s (full).
-                     * 3. IF the task is in the ready list, re-sort it with
-                     *    the new deadline. */
-
+                    cbsTRACE("[CBS][tick=%lu][budget_depleted] task=%s deadline(old)=%lu new_deadline=%lu budget=%lu period=%lu\r\n",
+                        (unsigned long)xTickCount,
+                        pxCurrentTCB->pcTaskName,
+                        (unsigned long)(pxCurrentTCB->xCBSDeadline),
+                        (unsigned long)(pxCurrentTCB->xCBSDeadline + pxCurrentTCB->xCBSPeriod),
+                        (unsigned long)pxCurrentTCB->xCBSMaxBudget,
+                        (unsigned long)pxCurrentTCB->xCBSPeriod);
                     /* 1. Postpone deadline. */
                     pxCurrentTCB->xCBSDeadline += pxCurrentTCB->xCBSPeriod;
                     pxCurrentTCB->xAbsoluteDeadline = pxCurrentTCB->xCBSDeadline;
@@ -5441,7 +5444,6 @@ BaseType_t xTaskIncrementTick( void )
                     if( listIS_CONTAINED_WITHIN( &xEDFReadyList, &( pxCurrentTCB->xStateListItem ) ) != pdFALSE )
                     {
                         ( void ) uxListRemove( &( pxCurrentTCB->xStateListItem ) );
-                        
                         /* Apply CBS tie-breaking when re-inserting */
                         TickType_t xSortKey = pxCurrentTCB->xAbsoluteDeadline;
                         if( xSortKey > 0 ) { xSortKey--; }
@@ -5525,20 +5527,24 @@ BaseType_t xTaskIncrementTick( void )
                         if( pxTCB->xIsCBSTask == pdTRUE )
                         {
                             TickType_t xCurrentTime = xTickCount;
-
-                            /* If deadline has passed, the difference (d-a) would be underflow/negative. 
-                             * Otherwise, check if current_budget >= (server_deadline - current_time) * (Q_s / T_s).
-                             * To avoid floating point math, we re-arrange the inequality:
-                             * c * T_s >= (d - a) * Q_s
-                             * Cast to uint64_t to prevent 32-bit arithmetic overflows!
-                             */
-                            if( ( xCurrentTime >= pxTCB->xCBSDeadline ) ||
-                                ( ( ( uint64_t ) pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod ) >= 
-                                  ( ( uint64_t ) ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget ) ) )
+                            uint64_t lhs = (uint64_t)pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod;
+                            uint64_t rhs = (uint64_t)(pxTCB->xCBSDeadline - xCurrentTime) * pxTCB->xCBSMaxBudget;
+                            int bandwidth_check = ( xCurrentTime >= pxTCB->xCBSDeadline ) || ( lhs >= rhs );
+                            /* Begin FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
+                            cbsTRACE("[CBS][tick=%lu][job_arrival] task=%s cur_budget=%lu cur_deadline=%lu now=%lu Qs=%lu Ts=%lu check:%s lhs=%llu rhs=%llu\r\n",
+                                (unsigned long)xCurrentTime,
+                                pxTCB->pcTaskName,
+                                (unsigned long)pxTCB->xCBSCurrentBudget,
+                                (unsigned long)pxTCB->xCBSDeadline,
+                                (unsigned long)xCurrentTime,
+                                (unsigned long)pxTCB->xCBSMaxBudget,
+                                (unsigned long)pxTCB->xCBSPeriod,
+                                bandwidth_check ? "reset-deadline" : "keep-task",
+                                (unsigned long long)lhs,
+                                (unsigned long long)rhs);
+                            /* End FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
+                            if( bandwidth_check )
                             {
-                                /* Bandwidth check failed or deadline passed while the task was
-                                 * sleeping. Assign a fresh deadline and full budget.
-                                 * This prevents the server from exceeding its allocated bandwidth. */
                                 pxTCB->xCBSDeadline = xCurrentTime + pxTCB->xCBSPeriod;
                                 pxTCB->xCBSCurrentBudget = pxTCB->xCBSMaxBudget;
                             }
@@ -6204,10 +6210,23 @@ BaseType_t xTaskRemoveFromEventList( const List_t * const pxEventList )
         if( pxUnblockedTCB->xIsCBSTask == pdTRUE )
         {
             TickType_t xCurrentTime = xTickCount;
-
-            if( ( xCurrentTime >= pxUnblockedTCB->xCBSDeadline ) ||
-                ( ( ( uint64_t ) pxUnblockedTCB->xCBSCurrentBudget * pxUnblockedTCB->xCBSPeriod ) >= 
-                  ( ( uint64_t ) ( pxUnblockedTCB->xCBSDeadline - xCurrentTime ) * pxUnblockedTCB->xCBSMaxBudget ) ) )
+            uint64_t lhs = (uint64_t)pxUnblockedTCB->xCBSCurrentBudget * pxUnblockedTCB->xCBSPeriod;
+            uint64_t rhs = (uint64_t)(pxUnblockedTCB->xCBSDeadline - xCurrentTime) * pxUnblockedTCB->xCBSMaxBudget;
+            int bandwidth_check = ( xCurrentTime >= pxUnblockedTCB->xCBSDeadline ) || ( lhs >= rhs );
+            /* Begin FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
+            cbsTRACE("[CBS][tick=%lu][job_arrival] task=%s cur_budget=%lu cur_deadline=%lu now=%lu Qs=%lu Ts=%lu check:%s lhs=%llu rhs=%llu\r\n",
+                (unsigned long)xCurrentTime,
+                pxUnblockedTCB->pcTaskName,
+                (unsigned long)pxUnblockedTCB->xCBSCurrentBudget,
+                (unsigned long)pxUnblockedTCB->xCBSDeadline,
+                (unsigned long)xCurrentTime,
+                (unsigned long)pxUnblockedTCB->xCBSMaxBudget,
+                (unsigned long)pxUnblockedTCB->xCBSPeriod,
+                bandwidth_check ? "reset-deadline" : "keep-task",
+                (unsigned long long)lhs,
+                (unsigned long long)rhs);
+            /* End FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
+            if( bandwidth_check )
             {
                 pxUnblockedTCB->xCBSDeadline = xCurrentTime + pxUnblockedTCB->xCBSPeriod;
                 pxUnblockedTCB->xCBSCurrentBudget = pxUnblockedTCB->xCBSMaxBudget;

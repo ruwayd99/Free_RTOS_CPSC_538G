@@ -72,6 +72,10 @@ When mainCREATE_EDF_TEST is 1, it overrides the blinky/full choice. */
 #define mainCREATE_EDF_TEST 0
 #endif
 
+#ifndef mainCREATE_CBS_TEST
+#define mainCREATE_CBS_TEST 0
+#endif
+
 /*-----------------------------------------------------------*/
 
 /*
@@ -86,6 +90,8 @@ static void prvSetupHardware( void );
  */
 #if mainCREATE_EDF_TEST == 1
 extern void main_edf_test( void );
+#elif mainCREATE_CBS_TEST == 1
+extern void main_cbs_test( void );
 #elif mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 1
 extern void main_blinky( void );
 #else
@@ -105,6 +111,8 @@ void vLaunch( void)
 {
 #if mainCREATE_EDF_TEST == 1
     main_edf_test();
+#elif mainCREATE_CBS_TEST == 1
+    main_cbs_test();
 #elif mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 1
     main_blinky();
 #else
@@ -197,7 +205,7 @@ void vApplicationIdleHook( void )
 
 void vApplicationTickHook( void )
 {
-#if ( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 0 ) && ( mainCREATE_EDF_TEST == 0 )
+#if ( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 0 ) && ( mainCREATE_EDF_TEST == 0 ) && ( mainCREATE_CBS_TEST == 0 )
     {
         /* The full demo includes a software timer demo/test that requires
         prodding periodically from the tick interrupt. */
