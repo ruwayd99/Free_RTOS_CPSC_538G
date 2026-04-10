@@ -82,7 +82,7 @@ void main_cbs_test(void)
     {
         char name[16];
         snprintf(name, sizeof(name), "PERIODIC_%d", i);
-        xTaskCreateEDF(vPeriodicTask, name, 256, (void *)(uintptr_t)i,
+        xTaskCreateEDF(vPeriodicTask, name, 512, (void *)(uintptr_t)i,
                       pdMS_TO_TICKS(PERIODIC_PERIOD_MS),
                       pdMS_TO_TICKS(PERIODIC_PERIOD_MS),
                       pdMS_TO_TICKS(PERIODIC_WCET_MS),
@@ -90,13 +90,13 @@ void main_cbs_test(void)
     }
 
     // CBS aperiodic task
-    xTaskCreateCBS(vCBSAperiodicTask, "CBS", 256, NULL,
+    xTaskCreateCBS(vCBSAperiodicTask, "CBS", 512, NULL,
                   pdMS_TO_TICKS(CBS_BUDGET_MS),
                   pdMS_TO_TICKS(CBS_PERIOD_MS),
                   &xCBSTaskHandle);
 
     // CBS trigger task
-    xTaskCreate(vCBSTriggerTask, "CBS_TRIGGER", 128, NULL, tskIDLE_PRIORITY + 1, NULL);
+    xTaskCreate(vCBSTriggerTask, "CBS_TRIGGER", 512, NULL, tskIDLE_PRIORITY + 1, NULL);
 
     vTaskStartScheduler();
     for (;;)
