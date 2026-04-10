@@ -91,7 +91,29 @@ Read the chapter on Dynamic Priority Servers in the text (chapter 7). In essence
 
 # [Task 4] Supporting Multiprocessor Real-time Scheduling in FreeRTOS
 
-TBD
+In this part you will implement both partitioned and global EDF. You will be considering only _implicit-deadline_ periodic tasks. The different multiprocessor scheduling approaches (partitioned vs. global) pose different classes of challenges, both theoretically and implementation-wise, and the goal of this part is to learn the algorithmic complexities of multiprocessor scheduling, as well as gain an understanding and appreciation of the practical issues and challenges related to supporting multiprocessor execution and scheduling.
+
+Our platform contains two identical cores, so we will be considering the _identical machine_ multiprocessor model. In computer architecture, this is called the Symmetric MultiProcessor (SMP) architecture. In the case of multi-core processors, the SMP architecture applies to the cores, treating them as separate processors. SMP systems are tightly coupled multiprocessor systems with a pool of homogeneous processors running independently of each other. Each processor, executing different programs and working on different sets of data, has the capability of sharing common resources (memory, I/O device, interrupt system and so on) that are connected using a system bus or a crossbar.
+
+The following source is a really good starting point: [Introduction to Symmetric Multiprocessing (SMP) with FreeRTOS](https://github.com/FreeRTOS/FreeRTOS-SMP-Demos/blob/main/SMP.md). Earlier, as there was no multiprocessing support at all for FreeRTOS, students had to work their way up from the ARM processor data sheets. With the SMP support now, this task should be a lot easier!
+
+Your solution should include the ability to specify the core on which a task runs, remove a task from a processor, or change the processor upon which the task is running (migration), etc. You may expose as many (programming) interfaces in order to complete this task in the cleanest possible way. Among the things that you should be thinking about are:
+
+Interrupt handling and timer functionality: Do we need a single interrupt controller/timer per core or is one shared interrupt controller/timer sufficient?
+
+How to stop/start each core;
+
+Dispatching tasks to certain cores, as well as task migration across cores;
+
+Do you need a separate scheduler per core in partitioned scheduling? Is the situation different in global scheduling?
+
+You need not worry about resource sharing, nor do you need to worry about inter-task communication. You may assume that the tasks are independent and do not share resources.
+
+The kernel itself is a task, so the decision of which core runs the kernel task at any time should be considered in any multiprocessor scheduling scheme. One option is to always execute the kernel on core 0 so that it is pinned to that core forever, even in global scheduling. Another is to treat the kernel as purely an “interrupt-handler”, where it is invoked in response to a service request and will run on the core from which the request originated.
+
+In contrast to partitioned scheduling, global scheduling permits task migration (i.e., different jobs of an individual task may execute upon different processors), as well as job-migration: An individual job that is preempted may resume execution upon a different processor from the one upon which it had been executing prior to preemption. Thus, for global EDF scheduling, a single ready queue is maintained for all tasks and processors. Tasks are inserted into the global queue in EDF order, and the job at the head of the ready queue is dispatched to any processor.
+
+Implement partitioned and global EDF and add all the required support in FreeRTOS. Also add a simple admission control test of your choice. Expose configuration variables to allow the user to choose which multiprocessor scheduling strategy should be used. Your partitioned and global EDF should co-exist in the kernel’s code base (but not active simultaneously), and the user should merely activate any by defining the proper constant (`GLOBAL_EDF_ENABLE`, `PARTITIONED_EDF_ENABLE`). If no multi-core scheduling algorithm is specified by the user, make global EDF the default scheduler.
 
 
 # Submission Instructions

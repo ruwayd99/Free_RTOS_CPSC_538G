@@ -1039,9 +1039,11 @@ Add these EDF fields into `TCB_t` (`tskTaskControlBlock`) so each task carries f
     TickType_t xRelativeDeadline;   /* D: Relative deadline in ticks from each release. */
     TickType_t xAbsoluteDeadline;   /* Absolute deadline of currently active job. */
     TickType_t xWcetTicks;          /* C: Worst-case execution budget per job (in ticks). */
+    TickType_t xSRPBlockingBound;   /* B: SRP blocking bound (0 when SRP disabled). */
     TickType_t xLastReleaseTick;    /* Tick when current job was released. */
     TickType_t xJobExecTicks;       /* Execution consumed by current job (debug/admission stats). */
     UBaseType_t uxEDFFlags;         /* Bit flags (e.g., periodic task, job active, was preempted). */
+    ListItem_t xEDFRegistryListItem;/* Dedicated list item for EDF registry membership. */
 #endif
 ```
 
@@ -1147,12 +1149,16 @@ Add EDF admission helper declarations in `tasks.c` (private/static).
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    /* Candidate parameters used by admission logic before task is inserted. */
+    /* Candidate parameters used by admission logic before task is inserted.
+     * When SRP is enabled, xB and uxLevel are populated so both admission
+     * paths can account for SRP blocking. */
     typedef struct xEDFAdmissionTaskParams
     {
         TickType_t xC;            /* WCET (execution budget) */
         TickType_t xT;            /* Period */
         TickType_t xD;            /* Relative deadline */
+        TickType_t xB;            /* SRP blocking bound (0 when SRP disabled) */
+        UBaseType_t uxLevel;      /* SRP preemption level (0 when SRP disabled) */
         const char * pcName;      /* Used only for tracing */
     } EDFAdmissionTaskParams_t;
 
@@ -1201,6 +1207,13 @@ BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
     xCandidate.xC = xWcetTicks;
     xCandidate.xT = xPeriod;
     xCandidate.xD = xRelativeDeadline;
+    #if ( configUSE_SRP == 1 )
+        xCandidate.uxLevel = prvSRPCalculateTaskPreemptionLevel( xRelativeDeadline );
+        xCandidate.xB = prvSRPComputeBlockingBoundForLevel( xCandidate.uxLevel );
+    #else
+        xCandidate.uxLevel = 0U;
+        xCandidate.xB = 0U;
+    #endif
     xCandidate.pcName = pcName;
 
     /* Admission and insertion must be atomic while scheduler is running. */
@@ -1305,10 +1318,13 @@ static BaseType_t prvEDFAdmissionControl( const EDFAdmissionTaskParams_t * pxCan
 
 #### 5.7.2 Implicit path (`U <= 1`)
 
+> **Note:** When SRP is enabled, the formula becomes `sum((C_i + B_i) / T_i) <= 1` to account for SRP blocking. The code below already handles this: `xSRPBlockingBound` is 0 when SRP is disabled, so the formula gracefully degrades to `sum(C_i / T_i) <= 1`.
+
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
 /* Uses fixed-point micro-units to avoid floating-point math in kernel.
- * scale = 1,000,000 means utilization 1.0 == 1,000,000. */
+ * scale = 1,000,000 means utilization 1.0 == 1,000,000.
+ * When SRP is enabled, blocking bound B is added to each task's C. */
 static BaseType_t prvEDFAdmissionImplicit( const EDFAdmissionTaskParams_t * pxCandidate,
                                            const char ** ppcReason )
 {
@@ -1321,10 +1337,10 @@ static BaseType_t prvEDFAdmissionImplicit( const EDFAdmissionTaskParams_t * pxCa
          pxIt = listGET_NEXT( pxIt ) )
     {
         const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
-        ullUtil += ( ( uint64_t ) pxTCB->xWcetTicks * ulScale ) / pxTCB->xPeriod;
+        ullUtil += ( ( uint64_t ) ( pxTCB->xWcetTicks + pxTCB->xSRPBlockingBound ) * ulScale ) / pxTCB->xPeriod;
     }
 
-    ullUtil += ( ( uint64_t ) pxCandidate->xC * ulScale ) / pxCandidate->xT;
+    ullUtil += ( ( uint64_t ) ( pxCandidate->xC + pxCandidate->xB ) * ulScale ) / pxCandidate->xT;
 
     if( ullUtil <= ulScale )
     {
@@ -1340,44 +1356,73 @@ static BaseType_t prvEDFAdmissionImplicit( const EDFAdmissionTaskParams_t * pxCa
 
 #### 5.7.3 Constrained path (exact dbf)
 
+> **Note:** This code has been corrected from the original version. See [Section 6.10](#610-admission-control-bug-fixes-and-corrections) for full details on the three bugs that were fixed (horizon computation, loop start point, and SRP blocking bound ceiling check).
+
 ```c
+/* GCD / LCM helpers for horizon computation. */
 #if ( configUSE_EDF_SCHEDULING == 1 )
-/* Exact processor-demand test over candidate deadline grid.
- * This is intentionally explicit and heavily commented for clarity. */
+static TickType_t prvGCD( TickType_t a, TickType_t b )
+{
+    while( b != 0U )
+    {
+        TickType_t t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+static TickType_t prvLCM( TickType_t a, TickType_t b )
+{
+    if( ( a == 0U ) || ( b == 0U ) ) return 0U;
+    return ( a / prvGCD( a, b ) ) * b;
+}
+#endif
+
+#if ( configUSE_EDF_SCHEDULING == 1 )
+/* Exact processor-demand test (DBF).
+ *
+ * Horizon: LCM of all task periods, capped at configEDF_MAX_ANALYSIS_TICKS.
+ * Loop range: [min(D_i), horizon] -- skips t < min(D_i) where DBF = 0
+ *             and the blocking term alone would cause spurious failures.
+ * Blocking: max(B_i) across all tasks is added to demand at each t. */
 static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * pxCandidate,
                                               const char ** ppcReason )
 {
     TickType_t xTTest;
-    TickType_t xMaxDeadline = pxCandidate->xD;
     const ListItem_t * pxIt;
 
-    /* Pick a safe finite horizon for class project workloads.
-     * You can tighten this later, but this keeps logic understandable. */
-    TickType_t xHorizon = pxCandidate->xT + pxCandidate->xD;
-
-    /* Expand horizon using admitted tasks so we do not stop too early. */
+    /* Horizon: LCM of all task periods, capped. */
+    TickType_t xHorizon = pxCandidate->xT;
     for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
          pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
          pxIt = listGET_NEXT( pxIt ) )
     {
         const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
-
-        if( pxTCB->xRelativeDeadline > xMaxDeadline )
+        xHorizon = prvLCM( xHorizon, pxTCB->xPeriod );
+        if( xHorizon > configEDF_MAX_ANALYSIS_TICKS )
         {
-            xMaxDeadline = pxTCB->xRelativeDeadline;
-        }
-
-        if( ( pxTCB->xPeriod + pxTCB->xRelativeDeadline ) > xHorizon )
-        {
-            xHorizon = pxTCB->xPeriod + pxTCB->xRelativeDeadline;
+            xHorizon = configEDF_MAX_ANALYSIS_TICKS;
+            break;
         }
     }
 
-    /* Evaluate demand at each deadline instant t in [1, horizon].
-     * We use a straightforward loop for educational clarity. */
-    for( xTTest = 1U; xTTest <= xHorizon; xTTest++ )
+    /* Minimum deadline across all tasks (including candidate). */
+    TickType_t xMinDeadline = pxCandidate->xD;
+    for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+         pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
+         pxIt = listGET_NEXT( pxIt ) )
+    {
+        const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+        if( pxTCB->xRelativeDeadline < xMinDeadline )
+            xMinDeadline = pxTCB->xRelativeDeadline;
+    }
+
+    /* Evaluate demand at each integer t in [min(D_i), horizon]. */
+    for( xTTest = xMinDeadline; xTTest <= xHorizon; xTTest++ )
     {
         uint64_t ullDemand = 0ULL;
+        TickType_t xMaxBlocking = pxCandidate->xB;
 
         /* Demand from already admitted tasks. */
         for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
@@ -1392,6 +1437,9 @@ static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * p
                 uint64_t ullJobs = ( ( uint64_t ) ( xTTest - pxTCB->xRelativeDeadline ) / pxTCB->xPeriod ) + 1ULL;
                 ullDemand += ullJobs * pxTCB->xWcetTicks;
             }
+
+            if( pxTCB->xSRPBlockingBound > xMaxBlocking )
+                xMaxBlocking = pxTCB->xSRPBlockingBound;
         }
 
         /* Demand from candidate task. */
@@ -1401,10 +1449,10 @@ static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * p
             ullDemand += ullCandidateJobs * pxCandidate->xC;
         }
 
-        /* If demand exceeds interval length, set is infeasible. */
-        if( ullDemand > ( uint64_t ) xTTest )
+        /* If demand + blocking exceeds interval length, set is infeasible. */
+        if( ( ullDemand + ( uint64_t ) xMaxBlocking ) > ( uint64_t ) xTTest )
         {
-            *ppcReason = "constrained DBF>t";
+            *ppcReason = "constrained DBF+B>t";
             return pdFAIL;
         }
     }
@@ -2601,6 +2649,241 @@ Copy-Item .\build\main_edf_test.uf2 E:\
   - runtime add summary (`add_ok` and `add_reject`)
 
 If all observations match, your normal SRP integration test is passing.
+
+### 6.10 Admission Control Bug Fixes and Corrections
+
+This section documents three bugs that were discovered in the EDF + SRP admission control implementation and the exact fixes applied to the kernel code.
+
+---
+
+#### Bug 1: Constrained-Path Loop Started at `t = 1` (Spurious Rejection)
+
+**Symptom:** When SRP is enabled, the constrained-path admission test (`prvEDFAdmissionConstrained`) would reject task sets that are actually feasible. For example, `SRP_HIGH` (T=5000, D=2500, C=700) was being rejected even though the combined utilization of the task set is well below 1.
+
+**Root cause:** The loop `for( xTTest = 1U; xTTest <= xHorizon; xTTest++ )` evaluated the demand-bound feasibility check at every integer starting from `t = 1`. With SRP blocking, the check is:
+
+```
+DBF(t) + max(B_i) <= t
+```
+
+At `t = 1`, no task has an absolute deadline yet, so `DBF(1) = 0`. But the blocking term `max(B_i) = 1200` (from the SRP_LOW task's critical section). The check becomes `0 + 1200 > 1`, which falsely fails.
+
+**Why this is wrong:** The DBF feasibility test is only meaningful at **deadline instants** -- time points where at least one task has a deadline. For `t < min(D_i)`, no job has a deadline, so there is nothing to schedule and blocking is irrelevant. The standard result from the literature (Baruah, 2006) only tests at deadline instants `{k * T_i + D_i | i in tasks, k >= 0}`.
+
+**Fix:** Start the loop from `min(D_i)` across all tasks (including the candidate) instead of `t = 1`. At any `t >= min(D_i)`, at least one task has a deadline, so the blocking term is meaningful and the check `DBF(t) + B <= t` is valid.
+
+**Before:**
+```c
+for( xTTest = 1U; xTTest <= xHorizon; xTTest++ )
+```
+
+**After:**
+```c
+/* Find smallest deadline across all tasks. */
+TickType_t xMinDeadline = pxCandidate->xD;
+for( /* each admitted task pxTCB */ )
+{
+    if( pxTCB->xRelativeDeadline < xMinDeadline )
+        xMinDeadline = pxTCB->xRelativeDeadline;
+}
+
+/* Test only from min(D_i) where the check is meaningful. */
+for( xTTest = xMinDeadline; xTTest <= xHorizon; xTTest++ )
+```
+
+**Worked example with the fix:**
+```
+Task set: SRP_LOW (C=1600, T=7000, D=5500, B=0)
+          SRP_HIGH candidate (C=700, T=5000, D=2500, B=1200)
+
+min(D_i) = min(5500, 2500) = 2500
+Loop starts at t = 2500.
+
+t=2500: DBF_LOW=0, DBF_HIGH=700.  demand=700.   700 + 1200 = 1900 <= 2500  PASS
+t=5500: DBF_LOW=1600, DBF_HIGH=700.  demand=2300. 2300 + 1200 = 3500 <= 5500  PASS
+t=7500: DBF_LOW=1600, DBF_HIGH=1400. demand=3000. 3000 + 1200 = 4200 <= 7500  PASS
+...all test points pass -> SRP_HIGH ADMITTED
+```
+
+**File changed:** `tasks.c` -- `prvEDFAdmissionConstrained()`
+
+---
+
+#### Bug 2: Constrained-Path Horizon Was Too Short
+
+**Symptom:** For certain task sets, the analysis window could end before a feasibility violation becomes visible, causing an infeasible task set to be silently accepted.
+
+**Root cause:** The horizon was computed as `max(T_i + D_i)` -- the deadline of the second job of the task with the largest `T + D`. This is not a theoretically correct upper bound for the demand-bound function analysis.
+
+**Why this is wrong:** The standard result says the DBF test must be evaluated at all deadline instants up to the **hyperperiod** `H = lcm(T_1, ..., T_n)`. The expression `T_i + D_i` is just the second-job deadline of task `i` and can miss violations that only appear later.
+
+**Fix:** Compute the horizon as the LCM of all task periods, capped at `configEDF_MAX_ANALYSIS_TICKS` (default: 100,000 ticks) to prevent runaway analysis time on the embedded target.
+
+**Before:**
+```c
+TickType_t xHorizon = pxCandidate->xT + pxCandidate->xD;
+
+for( /* each admitted task */ )
+{
+    if( ( pxTCB->xPeriod + pxTCB->xRelativeDeadline ) > xHorizon )
+        xHorizon = pxTCB->xPeriod + pxTCB->xRelativeDeadline;
+}
+```
+
+**After:**
+```c
+TickType_t xHorizon = pxCandidate->xT;
+
+for( /* each admitted task pxTCB */ )
+{
+    xHorizon = prvLCM( xHorizon, pxTCB->xPeriod );
+
+    if( xHorizon > configEDF_MAX_ANALYSIS_TICKS )
+    {
+        xHorizon = configEDF_MAX_ANALYSIS_TICKS;
+        break;
+    }
+}
+```
+
+**New helper functions added to `tasks.c`:**
+```c
+static TickType_t prvGCD( TickType_t a, TickType_t b )
+{
+    while( b != 0U )
+    {
+        TickType_t t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+static TickType_t prvLCM( TickType_t a, TickType_t b )
+{
+    if( ( a == 0U ) || ( b == 0U ) ) return 0U;
+    /* Divide first to reduce overflow risk. */
+    return ( a / prvGCD( a, b ) ) * b;
+}
+```
+
+**New config constant added:**
+```c
+/* FreeRTOS.h (default) */
+#ifndef configEDF_MAX_ANALYSIS_TICKS
+    #define configEDF_MAX_ANALYSIS_TICKS    100000U
+#endif
+
+/* FreeRTOSConfig.h (user setting) */
+#define configEDF_MAX_ANALYSIS_TICKS 100000U
+```
+
+**Files changed:** `tasks.c` (helpers + horizon logic), `FreeRTOS.h` (default), `FreeRTOSConfig.h` (user override)
+
+---
+
+#### Bug 3: SRP Blocking Bound Missing Resource Ceiling Check
+
+**Symptom:** The SRP blocking bound `B_i` could be overly conservative, potentially rejecting task sets that are actually feasible. In the worst case, a task would be assigned a large blocking bound from a resource that could never actually block it under SRP.
+
+**Root cause:** `prvSRPComputeBlockingBoundForLevel()` checked whether each resource user had a preemption level lower than the task (`pi_j < pi_i`) but did **not** check whether the resource's ceiling was high enough to actually block the task (`ceil(R_k) >= pi_i`).
+
+**Why this is wrong:** Under SRP, a task `tau_i` can only be blocked by a resource `R_k` if the resource's ceiling is at or above `tau_i`'s preemption level. This is because the system ceiling only rises to `ceil(R_k)` when `R_k` is held, and SRP blocks a task only when its preemption level is `<= system ceiling`. If `ceil(R_k) < pi_i`, the system ceiling cannot rise high enough to block `tau_i` via `R_k`.
+
+The correct SRP blocking bound formula from the literature is:
+
+```
+B_i = max over all resources R_k, over all tasks tau_j where:
+        pi_j < pi_i              (lower preemption level)
+    AND ceil(R_k) >= pi_i        (resource ceiling can block task i)
+  of CS(j, k)
+```
+
+where `ceil(R_k) = max preemption level among all registered users of R_k`.
+
+**Fix:** Compute the **static ceiling** of each resource (max preemption level of any user) and skip resources whose ceiling is below the task's level.
+
+**Before:**
+```c
+static TickType_t prvSRPComputeBlockingBoundForLevel( UBaseType_t uxTaskLevel )
+{
+    for( each resource )
+    {
+        for( each user of resource )
+        {
+            if( user.level < taskLevel && user.CS > bound )
+                bound = user.CS;
+        }
+    }
+    return bound;
+}
+```
+
+**After:**
+```c
+static TickType_t prvSRPComputeBlockingBoundForLevel( UBaseType_t uxTaskLevel )
+{
+    for( each resource )
+    {
+        /* Compute static resource ceiling. */
+        uxResourceCeiling = max( user.level for all users );
+
+        /* Skip if ceiling too low to block this task. */
+        if( uxResourceCeiling < uxTaskLevel )
+            continue;
+
+        for( each user of resource )
+        {
+            if( user.level < taskLevel && user.CS > bound )
+                bound = user.CS;
+        }
+    }
+    return bound;
+}
+```
+
+**File changed:** `tasks.c` -- `prvSRPComputeBlockingBoundForLevel()`
+
+---
+
+#### Additional Fix: Uninitialized Variables in Test File
+
+**File:** `main_edf_test.c`
+
+The variables `xBgCreateResult` and `xRuntimeCreateResult` were declared without initialization, but the background and runtime task creations were commented out. The `printf` at the end still referenced these variables, causing undefined behavior.
+
+**Fix:** Initialize all result variables to `pdFAIL`:
+```c
+BaseType_t xLowCreateResult = pdFAIL;
+BaseType_t xHighCreateResult = pdFAIL;
+BaseType_t xBgCreateResult = pdFAIL;
+BaseType_t xRuntimeCreateResult = pdFAIL;
+```
+
+---
+
+#### Summary of All Files Changed
+
+| File | Change | Bug # |
+|------|--------|-------|
+| `tasks.c` | Added `prvGCD()` and `prvLCM()` helper functions | 2 |
+| `tasks.c` | `prvEDFAdmissionConstrained()`: horizon now uses LCM of periods (capped) | 2 |
+| `tasks.c` | `prvEDFAdmissionConstrained()`: loop starts from `min(D_i)` instead of 1 | 1 |
+| `tasks.c` | `prvSRPComputeBlockingBoundForLevel()`: added static resource ceiling check | 3 |
+| `FreeRTOS.h` | Added `configEDF_MAX_ANALYSIS_TICKS` default (100000) | 2 |
+| `FreeRTOSConfig.h` | Added `configEDF_MAX_ANALYSIS_TICKS` user setting | 2 |
+| `main_edf_test.c` | Initialized result variables to `pdFAIL` | N/A |
+
+#### How the Existing Code Was Already Correct
+
+The following parts of the admission control were already correct and did **not** need changes:
+
+- **Dispatch logic** (`prvEDFAdmissionControl`): correctly detects constrained vs implicit task sets by checking if any task has `D < T`.
+- **Implicit path** (`prvEDFAdmissionImplicit`): already uses `(C + B) / T` for each task, accounting for SRP blocking.
+- **DBF formula itself**: `max(0, floor((t - D) / T) + 1) * C` is correct.
+- **Blocking in constrained path**: `max(B_i)` is computed and added to demand at each test point (this was correct in logic, just applied to the wrong range of test points).
+- **Candidate struct**: already includes `xB` (blocking) and `uxLevel` (preemption level) fields.
+- **`xTaskCreateEDF`**: already calls `prvSRPComputeBlockingBoundForLevel()` to compute blocking before admission, and stores the result in the TCB.
 
 ---
 

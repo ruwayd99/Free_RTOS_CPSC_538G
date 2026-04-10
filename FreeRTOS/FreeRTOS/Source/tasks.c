@@ -858,41 +858,93 @@ static BaseType_t prvEDFAdmissionImplicit( const EDFAdmissionTaskParams_t * pxCa
 }
 #endif
 
+/*  FreeRTOS CPSC_538G EDF: GCD / LCM helpers for horizon computation. */
 #if ( configUSE_EDF_SCHEDULING == 1 )
-/* Exact processor-demand test over candidate deadline grid.
- * This is intentionally explicit and heavily commented for clarity. */
+static TickType_t prvGCD( TickType_t a, TickType_t b )
+{
+    while( b != 0U )
+    {
+        TickType_t t = b;
+        b = a % b;
+        a = t;
+    }
+
+    return a;
+}
+
+static TickType_t prvLCM( TickType_t a, TickType_t b )
+{
+    if( ( a == 0U ) || ( b == 0U ) )
+    {
+        return 0U;
+    }
+
+    /* Divide first to reduce overflow risk: lcm = a / gcd(a,b) * b */
+    return ( a / prvGCD( a, b ) ) * b;
+}
+#endif
+
+#if ( configUSE_EDF_SCHEDULING == 1 )
+/* Exact processor-demand test (DBF) checked at every integer in
+ * [min(D_i), horizon].
+ *
+ * FIXES applied vs. original version:
+ *
+ * 1. Horizon: now uses LCM of all task periods (capped at
+ *    configEDF_MAX_ANALYSIS_TICKS) instead of max(T_i + D_i).
+ *    The hyperperiod is the theoretically correct upper bound for
+ *    the demand-bound feasibility test.
+ *
+ * 2. Loop start: begins at min(D_i) across all tasks (including
+ *    the candidate) instead of t = 1.  For t < min(D_i) no task
+ *    has an absolute deadline, so the demand is zero and the
+ *    feasibility check is trivially satisfied.  Starting at t = 1
+ *    caused *spurious* rejections when the SRP blocking term B
+ *    alone exceeded a small t value (e.g. B = 1200 > t = 1).
+ *
+ * 3. SRP blocking: the max(B_i) term across all tasks is added to
+ *    the demand at each test point, which was already present but
+ *    only valid when combined with the corrected loop range. */
 static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * pxCandidate,
                                               const char ** ppcReason )
 {
     TickType_t xTTest;
-    TickType_t xMaxDeadline = pxCandidate->xD;
     const ListItem_t * pxIt;
 
-    /* Pick a safe finite horizon for class project workloads.
-     * You can tighten this later, but this keeps logic understandable. */
-    TickType_t xHorizon = pxCandidate->xT + pxCandidate->xD;
+    /* --- Horizon: LCM of all task periods, capped. --- */
+    TickType_t xHorizon = pxCandidate->xT;
 
-    /* Expand horizon using admitted tasks so we do not stop too early. */
+    for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+         pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
+         pxIt = listGET_NEXT( pxIt ) )
+    {
+        const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+        xHorizon = prvLCM( xHorizon, pxTCB->xPeriod );
+
+        if( xHorizon > configEDF_MAX_ANALYSIS_TICKS )
+        {
+            xHorizon = configEDF_MAX_ANALYSIS_TICKS;
+            break;
+        }
+    }
+
+    /* --- Minimum deadline across all tasks (including candidate). --- */
+    TickType_t xMinDeadline = pxCandidate->xD;
+
     for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
          pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
          pxIt = listGET_NEXT( pxIt ) )
     {
         const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
 
-        if( pxTCB->xRelativeDeadline > xMaxDeadline )
+        if( pxTCB->xRelativeDeadline < xMinDeadline )
         {
-            xMaxDeadline = pxTCB->xRelativeDeadline;
-        }
-
-        if( ( pxTCB->xPeriod + pxTCB->xRelativeDeadline ) > xHorizon )
-        {
-            xHorizon = pxTCB->xPeriod + pxTCB->xRelativeDeadline;
+            xMinDeadline = pxTCB->xRelativeDeadline;
         }
     }
 
-    /* Evaluate demand at each deadline instant t in [1, horizon].
-     * We use a straightforward loop for educational clarity. */
-    for( xTTest = 1U; xTTest <= xHorizon; xTTest++ )
+    /* --- Evaluate demand at each integer t in [min(D_i), horizon]. --- */
+    for( xTTest = xMinDeadline; xTTest <= xHorizon; xTTest++ )
     {
         uint64_t ullDemand = 0ULL;
         TickType_t xMaxBlocking = pxCandidate->xB;
@@ -924,7 +976,7 @@ static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * p
             ullDemand += ullCandidateJobs * pxCandidate->xC;
         }
 
-        /* If demand exceeds interval length, set is infeasible. */
+        /* If demand + blocking exceeds interval length, set is infeasible. */
         if( ( ullDemand + ( uint64_t ) xMaxBlocking ) > ( uint64_t ) xTTest )
         {
             *ppcReason = "constrained DBF+B>t";
@@ -2568,7 +2620,8 @@ static void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
                  * the suspended state - make this the current task. */
                 pxCurrentTCB = pxNewTCB;
 
-                if( uxCurrentNumberOfTasks == ( UBaseType_t ) 1 )
+                if( ( uxCurrentNumberOfTasks == ( UBaseType_t ) 1 ) &&
+                    ( pxDelayedTaskList == NULL ) )
                 {
                     /* This is the first task to be created so do the preliminary
                      * initialisation required.  We will not recover if this call
@@ -2642,7 +2695,8 @@ static void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
 
             if( xSchedulerRunning == pdFALSE )
             {
-                if( uxCurrentNumberOfTasks == ( UBaseType_t ) 1 )
+                if( ( uxCurrentNumberOfTasks == ( UBaseType_t ) 1 ) &&
+                    ( pxDelayedTaskList == NULL ) )
                 {
                     /* This is the first task to be created so do the preliminary
                      * initialisation required.  We will not recover if this call
@@ -6693,6 +6747,33 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
                   ( unsigned long ) pxTCB->xWcetTicks );
     #endif
 
+    #if ( configUSE_SRP == 1 )
+    {
+        UBaseType_t uxResourceIndex;
+
+        /* If a late job is dropped while inside a critical section, make sure
+         * any SRP-held units are released so the system ceiling cannot remain
+         * stuck and block future jobs indefinitely. */
+        for( uxResourceIndex = 0U; uxResourceIndex < configMAX_SRP_RESOURCES; uxResourceIndex++ )
+        {
+            SRPResourceControl_t * pxRes = &( xSRPResources[ uxResourceIndex ] );
+
+            if( ( pxRes->xInUse != pdFALSE ) &&
+                ( pxRes->xCurrentHolder == ( TaskHandle_t ) pxTCB ) &&
+                ( pxRes->uxCurrentHolderUnits > 0U ) )
+            {
+                pxRes->uxAvailableUnits += pxRes->uxCurrentHolderUnits;
+                pxRes->uxCurrentHolderUnits = 0U;
+                pxRes->xCurrentHolder = NULL;
+                pxRes->uxCurrentHolderLevel = 0U;
+            }
+        }
+
+        pxTCB->uxSRPHeldResources = 0U;
+        ( void ) prvSRPRecalculateSystemCeiling();
+    }
+    #endif
+
     /* Advance to next job window. */
     pxTCB->xLastReleaseTick += pxTCB->xPeriod;
     pxTCB->xAbsoluteDeadline = pxTCB->xLastReleaseTick + pxTCB->xRelativeDeadline;
@@ -6809,6 +6890,18 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         return uxSystemCeiling;
     }
 
+    /* Compute SRP blocking bound B for a task with the given preemption level.
+     *
+     * B_i = max over all resources R_k, over all tasks tau_j where:
+     *         pi_j < pi_i              (lower preemption level)
+     *     AND ceil(R_k) >= pi_i        (resource ceiling can block task i)
+     *   of CS(j, k)  (critical-section WCET of tau_j on R_k).
+     *
+     * The resource ceiling check was previously missing, making the bound
+     * overly conservative: it counted blocking from resources whose ceiling
+     * was too low to actually block the task under SRP.  The fix computes
+     * the static ceiling of each resource (max preemption level among all
+     * registered users) and skips resources that cannot cause blocking. */
     static TickType_t prvSRPComputeBlockingBoundForLevel( UBaseType_t uxTaskLevel )
     {
         UBaseType_t uxResourceIndex;
@@ -6818,12 +6911,35 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         {
             const SRPResourceControl_t * pxRes = &( xSRPResources[ uxResourceIndex ] );
             UBaseType_t uxUserIndex;
+            UBaseType_t uxResourceCeiling = 0U;
 
             if( pxRes->xInUse == pdFALSE )
             {
                 continue;
             }
 
+            /* Compute static resource ceiling = max preemption level of any
+             * registered user of this resource. */
+            for( uxUserIndex = 0U; uxUserIndex < pxRes->uxUserCount; uxUserIndex++ )
+            {
+                if( pxRes->xUsers[ uxUserIndex ].uxPreemptionLevel > uxResourceCeiling )
+                {
+                    uxResourceCeiling = pxRes->xUsers[ uxUserIndex ].uxPreemptionLevel;
+                }
+            }
+
+            /* Only resources whose ceiling >= task level can block this task
+             * under SRP (the system ceiling rises to at least ceil(R_k) when
+             * the resource is held, potentially blocking tasks with level
+             * <= ceil(R_k)). */
+            if( uxResourceCeiling < uxTaskLevel )
+            {
+                continue;
+            }
+
+            /* Among users with LOWER preemption level, find the longest
+             * critical section -- that is the worst-case blocking
+             * contribution of this resource to task i. */
             for( uxUserIndex = 0U; uxUserIndex < pxRes->uxUserCount; uxUserIndex++ )
             {
                 const SRPUserRegistration_t * pxUser = &( pxRes->xUsers[ uxUserIndex ] );
@@ -6847,6 +6963,14 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         if( uxMaxUnits == 0U )
         {
             return NULL;
+        }
+
+        /* Ensure kernel lists are initialized before allocating SRP resources.
+         * Otherwise, a later first-task creation may call prvInitialiseTaskLists()
+         * and clear xSRPResources, invalidating previously returned handles. */
+        if( pxDelayedTaskList == NULL )
+        {
+            prvInitialiseTaskLists();
         }
 
         taskENTER_CRITICAL();
@@ -6904,6 +7028,19 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         BaseType_t xResult = pdFAIL;
         SRPResourceControl_t * pxRes = prvFindSRPResource( xResource );
 
+        if(pxRes == NULL)
+            {
+                srpTRACE( "[SRP][ERROR] invalid take request res=%p units=%lu\r\n",
+                          xResource,
+                          ( unsigned long ) uxUnits );
+            }
+            if( uxUnits == 0U )
+            {
+                srpTRACE( "[SRP][ERROR] invalid take request res=%p units=%lu\r\n",
+                          xResource,
+                          ( unsigned long ) uxUnits );
+            }
+        
         if( ( pxRes == NULL ) || ( uxUnits == 0U ) )
         {
             return pdFAIL;
@@ -6912,6 +7049,37 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         taskENTER_CRITICAL();
         {
             TCB_t * pxTask = pxCurrentTCB;
+
+            /* Defensive consistency repair: stale holder/unit metadata can
+             * permanently block all future takes if a holder context is lost.
+             * Keep resource accounting coherent before applying SRP gate checks. */
+            if( pxRes->uxAvailableUnits > pxRes->uxTotalUnits )
+            {
+                pxRes->uxAvailableUnits = pxRes->uxTotalUnits;
+            }
+
+            if( pxRes->uxCurrentHolderUnits == 0U )
+            {
+                pxRes->xCurrentHolder = NULL;
+                pxRes->uxCurrentHolderLevel = 0U;
+            }
+
+            if( pxRes->xCurrentHolder == NULL )
+            {
+                pxRes->uxCurrentHolderUnits = 0U;
+            }
+            else
+            {
+                TCB_t * pxHolder = ( TCB_t * ) pxRes->xCurrentHolder;
+
+                if( pxHolder->uxSRPHeldResources == 0U )
+                {
+                    pxRes->xCurrentHolder = NULL;
+                    pxRes->uxCurrentHolderLevel = 0U;
+                    pxRes->uxCurrentHolderUnits = 0U;
+                    pxRes->uxAvailableUnits = pxRes->uxTotalUnits;
+                }
+            }
 
             if( ( uxUnits <= pxRes->uxAvailableUnits ) &&
                 ( ( pxTask->uxPreemptionLevel > uxSystemCeiling ) ||

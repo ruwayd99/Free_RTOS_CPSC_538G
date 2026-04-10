@@ -93,6 +93,14 @@
     #define configSRP_STACK_SHARING    0
 #endif
 
+/* Upper bound on the analysis window (in ticks) used by the constrained-
+ * deadline EDF admission test.  The test computes the LCM of all task
+ * periods as the theoretically correct horizon; this cap prevents runaway
+ * analysis time when the LCM is very large. */
+#ifndef configEDF_MAX_ANALYSIS_TICKS
+    #define configEDF_MAX_ANALYSIS_TICKS    100000U
+#endif
+
 /* Define configTICK_TYPE_WIDTH_IN_BITS according to the
  * value of configUSE_16_BIT_TICKS for backward compatibility. */
 #ifndef configTICK_TYPE_WIDTH_IN_BITS

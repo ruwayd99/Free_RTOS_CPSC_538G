@@ -102,6 +102,7 @@
 #define configUSE_SRP    1    /* Enable Stack Resource Policy */
 #define configMAX_SRP_RESOURCES 8
 #define configMAX_SRP_USERS_PER_RESOURCE 16
+#define configEDF_MAX_ANALYSIS_TICKS 100000U
 
 /* Interrupt nesting behaviour configuration. */
 /*
