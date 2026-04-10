@@ -118,5 +118,29 @@ target_include_directories(main_edf_test PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
         ${FREERTOS_DEMO_PATH}/Common/include)
 
+target_compile_options(main_edf_test PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
+        )
+
 target_link_libraries(main_edf_test pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
 pico_add_extra_outputs(main_edf_test)
+
+# Previous EDF test variant target
+add_executable(main_edf_test_previous
+        main.c
+        main_edf_test_previous.c
+        )
+
+target_compile_definitions(main_edf_test_previous PRIVATE
+        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
+        mainCREATE_EDF_TEST=1
+        )
+
+target_include_directories(main_edf_test_previous PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}
+        ${FREERTOS_DEMO_PATH}/Common/include)
+
+target_link_libraries(main_edf_test_previous pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+pico_add_extra_outputs(main_edf_test_previous)
