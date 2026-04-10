@@ -1,1 +1,3 @@
 FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/Standard/build-debug/*
+build/*
+.vscode/*
