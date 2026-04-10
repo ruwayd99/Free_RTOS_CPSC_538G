@@ -6,8 +6,8 @@
 #include "TaskNotify.h"
 #include "pico/stdlib.h"
 
-#define PIN_PERIODIC_BASE  2
-#define PIN_CBS_TASK       15
+#define PIN_PERIODIC_BASE  10
+#define PIN_CBS_TASK       21
 
 #define NUM_PERIODIC_TASKS 3
 
