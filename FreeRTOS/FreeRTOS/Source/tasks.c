@@ -3007,6 +3007,34 @@ void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime )
 }
 #endif
 
+/* FreeRTOS CPSC_538G related functions*/
+/* Public getters for EDF admission statistics. Useful for periodic traces that
+ * need to show how many tasks are currently admitted versus rejected without
+ * walking the internal registry list. */
+#if ( configUSE_EDF_SCHEDULING == 1 )
+UBaseType_t uxTaskGetEDFAdmittedCount( void )
+{
+    UBaseType_t uxCount;
+
+    taskENTER_CRITICAL();
+    uxCount = uxEDFAcceptedTaskCount;
+    taskEXIT_CRITICAL();
+
+    return uxCount;
+}
+
+UBaseType_t uxTaskGetEDFRejectedCount( void )
+{
+    UBaseType_t uxCount;
+
+    taskENTER_CRITICAL();
+    uxCount = uxEDFRejectedTaskCount;
+    taskEXIT_CRITICAL();
+
+    return uxCount;
+}
+#endif
+
 #if ( INCLUDE_xTaskDelayUntil == 1 )
 
     BaseType_t xTaskDelayUntil( TickType_t * const pxPreviousWakeTime,

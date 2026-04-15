@@ -1,4 +1,5 @@
 #include <stdio.h>
+
 #include "FreeRTOS.h"
 #include "task.h"
 #include "pico/stdlib.h"
@@ -7,13 +8,6 @@
 #define PIN_TASK_HIGH       11
 #define PIN_TASK_BG         12
 #define PIN_TASK_RUNTIME    13
-
-/* Forward declarations for task bodies. */
-static void vLowTask( void * pvParameters );
-static void vHighTask( void * pvParameters );   
-static void vBackgroundTask( void * pvParameters );
-static void vRuntimeAcceptedTask( void * pvParameters );
-static void vRuntimeCreatorTask( void * pvParameters );
 
 static SRPResourceHandle_t xSharedResource = NULL;
 
@@ -39,18 +33,17 @@ static void vLowTask( void * pvParameters )
 
     for( ;; )
     {
+        gpio_put( PIN_TASK_LOW, 1 );
+
         while( xSRPResourceTake( xSharedResource, 1U ) != pdPASS )
         {
-            gpio_put( PIN_TASK_LOW, 0 );
             taskYIELD();
         }
 
-        gpio_put( PIN_TASK_LOW, 1 );
-
-        prvBusyWorkTicks( pdMS_TO_TICKS( 1600 ) );
+        prvBusyWorkTicks( pdMS_TO_TICKS( 1200 ) );
         vSRPResourceGive( xSharedResource, 1U );
 
-        //prvBusyWorkTicks( pdMS_TO_TICKS( 200 ) );
+        prvBusyWorkTicks( pdMS_TO_TICKS( 200 ) );
 
         gpio_put( PIN_TASK_LOW, 0 );
         vTaskDelayUntilNextPeriod( &xLastWake );
@@ -64,15 +57,14 @@ static void vHighTask( void * pvParameters )
 
     for( ;; )
     {
+        gpio_put( PIN_TASK_HIGH, 1 );
+
         while( xSRPResourceTake( xSharedResource, 1U ) != pdPASS )
         {
-            gpio_put( PIN_TASK_HIGH, 0 );
             taskYIELD();
         }
 
-        gpio_put( PIN_TASK_HIGH, 1 );
-
-        prvBusyWorkTicks( pdMS_TO_TICKS( 700 ) );
+        prvBusyWorkTicks( pdMS_TO_TICKS( 350 ) );
         vSRPResourceGive( xSharedResource, 1U );
 
         gpio_put( PIN_TASK_HIGH, 0 );
@@ -147,11 +139,6 @@ static void vRuntimeCreatorTask( void * pvParameters )
 
 void main_edf_test( void )
 {
-    BaseType_t xLowCreateResult = pdFAIL;
-    BaseType_t xHighCreateResult = pdFAIL;
-    BaseType_t xBgCreateResult = pdFAIL;
-    BaseType_t xRuntimeCreateResult = pdFAIL;
-
     const TickType_t xLowPeriod = pdMS_TO_TICKS( 7000 );
     const TickType_t xLowDeadline = pdMS_TO_TICKS( 5500 );
     const TickType_t xLowWCET = pdMS_TO_TICKS( 1600 );
@@ -174,12 +161,7 @@ void main_edf_test( void )
     gpio_set_dir( PIN_TASK_RUNTIME, GPIO_OUT );
 
     xSharedResource = xSRPResourceCreate( 1U );
-
-    if( xSharedResource == NULL )
-    {
-        printf( "[TEST][error] xSRPResourceCreate failed\r\n" );
-        return;
-    }
+    configASSERT( xSharedResource != NULL );
 
     vSRPResourceRegisterUser( xSharedResource,
                               prvLevelFromDeadline( xLowDeadline ),
@@ -202,45 +184,39 @@ void main_edf_test( void )
             ( unsigned long ) xBgDeadline,
             ( unsigned long ) xBgWCET );
 
-        xLowCreateResult = xTaskCreateEDF( vLowTask,
-                           "SRP_LOW",
-                           256,
-                           NULL,
-                           xLowPeriod,
-                           xLowDeadline,
-                           xLowWCET,
-                           NULL );
+    configASSERT( xTaskCreateEDF( vLowTask,
+                                  "SRP_LOW",
+                                  256,
+                                  NULL,
+                                  xLowPeriod,
+                                  xLowDeadline,
+                                  xLowWCET,
+                                  NULL ) == pdPASS );
 
-        xHighCreateResult = xTaskCreateEDF( vHighTask,
-                        "SRP_HIGH",
-                        256,
-                        NULL,
-                        xHighPeriod,
-                        xHighDeadline,
-                        xHighWCET,
-                        NULL );
+    configASSERT( xTaskCreateEDF( vHighTask,
+                                  "SRP_HIGH",
+                                  256,
+                                  NULL,
+                                  xHighPeriod,
+                                  xHighDeadline,
+                                  xHighWCET,
+                                  NULL ) == pdPASS );
 
-        // xBgCreateResult = xTaskCreateEDF( vBackgroundTask,
-        //                   "SRP_BG",
-        //                   256,
-        //                   NULL,
-        //                   xBgPeriod,
-        //                   xBgDeadline,
-        //                   xBgWCET,
-        //                   NULL );
+    configASSERT( xTaskCreateEDF( vBackgroundTask,
+                                  "SRP_BG",
+                                  256,
+                                  NULL,
+                                  xBgPeriod,
+                                  xBgDeadline,
+                                  xBgWCET,
+                                  NULL ) == pdPASS );
 
-        // xRuntimeCreateResult = xTaskCreate( vRuntimeCreatorTask,
-        //                 "RUNTIME_CREATE",
-        //                 256,
-        //                 NULL,
-        //                 tskIDLE_PRIORITY + 1U,
-        //                 NULL );
-
-        printf( "[TEST][create] low=%ld high=%ld bg=%ld runtime=%ld\r\n",
-            ( long ) xLowCreateResult,
-            ( long ) xHighCreateResult,
-            ( long ) xBgCreateResult,
-            ( long ) xRuntimeCreateResult );
+    configASSERT( xTaskCreate( vRuntimeCreatorTask,
+                               "RUNTIME_CREATE",
+                               256,
+                               NULL,
+                               tskIDLE_PRIORITY + 1U,
+                               NULL ) == pdPASS );
 
     vTaskStartScheduler();
 

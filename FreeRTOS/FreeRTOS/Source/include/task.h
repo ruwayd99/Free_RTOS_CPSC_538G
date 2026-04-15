@@ -319,6 +319,15 @@ typedef enum
      *                     (initialize it with xTaskGetTickCount() before
      *                     your task's main loop). */
     void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime );
+
+    /* Returns the number of EDF periodic tasks currently admitted by the
+     * admission controller (i.e. accepted and still alive). Useful for
+     * periodic trace prints that want to observe the dynamic task count. */
+    UBaseType_t uxTaskGetEDFAdmittedCount( void );
+
+    /* Returns the lifetime count of EDF task creation attempts that were
+     * rejected by the admission controller. */
+    UBaseType_t uxTaskGetEDFRejectedCount( void );
 #endif
 
 #if ( configUSE_SRP == 1 )

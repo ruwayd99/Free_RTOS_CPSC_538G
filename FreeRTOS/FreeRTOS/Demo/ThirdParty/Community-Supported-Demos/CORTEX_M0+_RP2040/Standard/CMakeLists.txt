@@ -144,3 +144,51 @@ target_include_directories(main_edf_test_previous PRIVATE
 
 target_link_libraries(main_edf_test_previous pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
 pico_add_extra_outputs(main_edf_test_previous)
+
+# EDF dynamic admission control test (8 tasks: 6 startup + 2 runtime + reject + accept)
+add_executable(main_edf_test_dynamic
+        main.c
+        main_edf_test_dynamic.c
+        )
+
+target_compile_definitions(main_edf_test_dynamic PRIVATE
+        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
+        mainCREATE_EDF_TEST=1
+        )
+
+target_include_directories(main_edf_test_dynamic PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}
+        ${FREERTOS_DEMO_PATH}/Common/include)
+
+target_compile_options(main_edf_test_dynamic PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
+        )
+
+target_link_libraries(main_edf_test_dynamic pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+pico_add_extra_outputs(main_edf_test_dynamic)
+
+# EDF 100-task admission control test (professor README requirement)
+add_executable(main_edf_test_100
+        main.c
+        main_edf_test_100.c
+        )
+
+target_compile_definitions(main_edf_test_100 PRIVATE
+        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
+        mainCREATE_EDF_TEST=1
+        )
+
+target_include_directories(main_edf_test_100 PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}
+        ${FREERTOS_DEMO_PATH}/Common/include)
+
+target_compile_options(main_edf_test_100 PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
+        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
+        )
+
+target_link_libraries(main_edf_test_100 pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+pico_add_extra_outputs(main_edf_test_100)
