@@ -1186,6 +1186,7 @@ BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
 {
     TCB_t * pxNewTCB;
     BaseType_t xReturn = pdFAIL;
+    BaseType_t xYieldRequired = pdFALSE;
     const char * pcReason = "UNKNOWN";
     EDFAdmissionTaskParams_t xCandidate;
 
@@ -1219,6 +1220,13 @@ BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
     /* Admission and insertion must be atomic while scheduler is running. */
     taskENTER_CRITICAL();
     {
+        /* First EDF task may be created before normal kernel list init path.
+         * Admission iterates EDF registry list, so ensure lists exist. */
+        if( pxDelayedTaskList == NULL )
+        {
+            prvInitialiseTaskLists();
+        }
+
         /* This works both pre-start and runtime, so requirement "accept new tasks
          * while system is running" is satisfied by the same API path. */
         if( prvEDFAdmissionControl( &xCandidate, &pcReason ) == pdPASS )
@@ -1237,14 +1245,19 @@ BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
                 pxNewTCB->xPeriod = xPeriod;
                 pxNewTCB->xRelativeDeadline = xRelativeDeadline;
                 pxNewTCB->xWcetTicks = xWcetTicks;
+                pxNewTCB->xSRPBlockingBound = xCandidate.xB;
                 pxNewTCB->xLastReleaseTick = xTaskGetTickCount();
                 pxNewTCB->xAbsoluteDeadline = pxNewTCB->xLastReleaseTick + xRelativeDeadline;
                 pxNewTCB->xJobExecTicks = 0U;
                 pxNewTCB->uxEDFFlags = 0U;
 
+                #if ( configUSE_SRP == 1 )
+                    pxNewTCB->uxPreemptionLevel = xCandidate.uxLevel;
+                #endif
+
                 /* Add task to scheduler and internal EDF registry. */
                 prvAddNewTaskToReadyList( pxNewTCB );
-                vListInsertEnd( &xEDFTaskRegistryList, &( pxNewTCB->xEventListItem ) );
+                vListInsertEnd( &xEDFTaskRegistryList, &( pxNewTCB->xEDFRegistryListItem ) );
                 uxEDFAcceptedTaskCount++;
 
                 prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdPASS, "admitted" );
@@ -1252,6 +1265,23 @@ BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
                           ( unsigned long ) xTaskGetTickCount(),
                           pcName,
                           ( xTaskGetSchedulerState() == taskSCHEDULER_RUNNING ) ? "runtime" : "pre-start" );
+
+                #if ( configUSE_SRP == 1 )
+                    srpTRACE( "[SRP][task-meta] task=%s level=%lu B=%lu\r\n",
+                              pcName,
+                              ( unsigned long ) pxNewTCB->uxPreemptionLevel,
+                              ( unsigned long ) pxNewTCB->xSRPBlockingBound );
+                #endif
+
+                if( xSchedulerRunning != pdFALSE )
+                {
+                    if( ( pxCurrentTCB == NULL ) ||
+                        ( pxCurrentTCB->xPeriod == 0U ) ||
+                        ( pxNewTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
+                    {
+                        xYieldRequired = pdTRUE;
+                    }
+                }
 
                 xReturn = pdPASS;
             }
@@ -1269,6 +1299,11 @@ BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
         }
     }
     taskEXIT_CRITICAL();
+
+    if( xYieldRequired != pdFALSE )
+    {
+        taskYIELD_WITHIN_API();
+    }
 
     return xReturn;
 }
@@ -1465,7 +1500,7 @@ static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * p
 
 ### 5.8 Ready List + Scheduler Selection
 
-Update task insertion macro so EDF tasks go to sorted EDF ready list.
+Update task insertion macro so EDF tasks go to sorted EDF ready list (with CBS tie-break support if CBS is enabled).
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
@@ -1475,9 +1510,15 @@ Update task insertion macro so EDF tasks go to sorted EDF ready list.
                                                                                          \
         if( ( pxTCB )->xPeriod > 0U )                                                    \
         {                                                                                \
-            /* Store absolute deadline in list item so vListInsert sorts by deadline. */ \
-            listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ),                    \
-                                     ( pxTCB )->xAbsoluteDeadline );                     \
+            TickType_t xSortKey = ( pxTCB )->xAbsoluteDeadline;                          \
+            /* CBS tie-breaking: if this is a CBS task, use deadline-1 so it            \
+             * is inserted just before periodic tasks at equal deadline. */               \
+            if( ( configUSE_CBS == 1 ) && ( ( pxTCB )->xIsCBSTask == pdTRUE ) &&         \
+                ( xSortKey > 0U ) )                                                      \
+            {                                                                            \
+                xSortKey--;                                                              \
+            }                                                                            \
+            listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ), xSortKey );         \
                                                                                          \
             /* EDF queue is always deadline-sorted in ascending order. */                \
             vListInsert( &xEDFReadyList, &( ( pxTCB )->xStateListItem ) );               \
@@ -1495,24 +1536,48 @@ Update task insertion macro so EDF tasks go to sorted EDF ready list.
 #endif
 ```
 
-Update task pick macro to choose EDF head.
+Update task pick macro to match current behavior:
+- With SRP enabled: pick earliest EDF task that passes SRP gate (`prvEDFSelectRunnableTaskBySRP`), else fall back to normal priority ready lists.
+- Without SRP: pick EDF head if available, else fall back to normal priority ready lists.
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    #define taskSELECT_HIGHEST_PRIORITY_TASK()                                        \
+    #if ( configUSE_SRP == 1 )
+        #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
+    do {                                                                              \
+        pxCurrentTCB = prvEDFSelectRunnableTaskBySRP();                               \
+        if( pxCurrentTCB == NULL )                                                    \
+        {                                                                             \
+            UBaseType_t uxTopPriority = uxTopReadyPriority;                           \
+            while( listLIST_IS_EMPTY( &( pxReadyTasksLists[ uxTopPriority ] ) ) != pdFALSE ) \
+            {                                                                         \
+                configASSERT( uxTopPriority );                                        \
+                --uxTopPriority;                                                      \
+            }                                                                         \
+            listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB, &( pxReadyTasksLists[ uxTopPriority ] ) ); \
+            uxTopReadyPriority = uxTopPriority;                                       \
+        }                                                                             \
+    } while( 0 )
+    #else
+        #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
     do {                                                                              \
         if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )                         \
         {                                                                             \
-            /* Head owner has earliest deadline -> run it now. */                    \
-            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFReadyList );\
+            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFReadyList ); \
         }                                                                             \
         else                                                                          \
         {                                                                             \
-            /* Fall back to idle when no EDF task is ready. */                       \
-            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY(                  \
-                &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) );                        \
+            UBaseType_t uxTopPriority = uxTopReadyPriority;                           \
+            while( listLIST_IS_EMPTY( &( pxReadyTasksLists[ uxTopPriority ] ) ) != pdFALSE ) \
+            {                                                                         \
+                configASSERT( uxTopPriority );                                        \
+                --uxTopPriority;                                                      \
+            }                                                                         \
+            listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB, &( pxReadyTasksLists[ uxTopPriority ] ) ); \
+            uxTopReadyPriority = uxTopPriority;                                       \
         }                                                                             \
     } while( 0 )
+    #endif
 #endif
 ```
 
@@ -1538,16 +1603,29 @@ In `xTaskIncrementTick()`, replace priority comparison with EDF comparison:
      * request a context switch immediately. */
     if( pxTCB->xPeriod > 0U )
     {
-        if( ( pxCurrentTCB->xPeriod == 0U ) ||
-            ( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
+        BaseType_t xCanRun = pdTRUE;
+
+        #if ( configUSE_SRP == 1 )
+            xCanRun = prvSRPCanTaskRun( pxTCB );
+        #endif
+
+        if( ( xCanRun != pdFALSE ) &&
+            ( ( pxCurrentTCB->xPeriod == 0U ) ||
+              ( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) ) )
         {
             xSwitchRequired = pdTRUE;
-            edfTRACE( "[EDF][tick=%lu][preempt] in=%s dl=%lu out=%s dl=%lu\r\n",
-                      ( unsigned long ) xTickCount,
-                      pxTCB->pcTaskName,
-                      ( unsigned long ) pxTCB->xAbsoluteDeadline,
-                      pxCurrentTCB->pcTaskName,
-                      ( unsigned long ) pxCurrentTCB->xAbsoluteDeadline );
+        }
+        else
+        {
+            #if ( configUSE_SRP == 1 )
+                if( xCanRun == pdFALSE )
+                {
+                    srpTRACE( "[SRP][BLOCK] task=%s level=%lu sysceil=%lu\r\n",
+                              pxTCB->pcTaskName,
+                              ( unsigned long ) pxTCB->uxPreemptionLevel,
+                              ( unsigned long ) uxSystemCeiling );
+                }
+            #endif
         }
     }
 #else
@@ -1582,12 +1660,48 @@ Disable time-slicing in EDF mode:
 static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
 {
     /* Emit trace before state update for easier debugging timeline. */
-    edfTRACE( "[EDF][tick=%lu][drop] task=%s missed_deadline=%lu consumed=%lu wcet=%lu\r\n",
-              ( unsigned long ) xNow,
-              pxTCB->pcTaskName,
-              ( unsigned long ) pxTCB->xAbsoluteDeadline,
-              ( unsigned long ) pxTCB->xJobExecTicks,
-              ( unsigned long ) pxTCB->xWcetTicks );
+    #if ( configUSE_SRP == 1 )
+        edfTRACE( "[EDF][tick=%lu][drop] task=%s missed_deadline=%lu consumed=%lu wcet=%lu level=%lu sysceil=%lu\r\n",
+                  ( unsigned long ) xNow,
+                  pxTCB->pcTaskName,
+                  ( unsigned long ) pxTCB->xAbsoluteDeadline,
+                  ( unsigned long ) pxTCB->xJobExecTicks,
+                  ( unsigned long ) pxTCB->xWcetTicks,
+                  ( unsigned long ) pxTCB->uxPreemptionLevel,
+                  ( unsigned long ) uxSystemCeiling );
+    #else
+        edfTRACE( "[EDF][tick=%lu][drop] task=%s missed_deadline=%lu consumed=%lu wcet=%lu\r\n",
+                  ( unsigned long ) xNow,
+                  pxTCB->pcTaskName,
+                  ( unsigned long ) pxTCB->xAbsoluteDeadline,
+                  ( unsigned long ) pxTCB->xJobExecTicks,
+                  ( unsigned long ) pxTCB->xWcetTicks );
+    #endif
+
+    #if ( configUSE_SRP == 1 )
+    {
+        UBaseType_t uxResourceIndex;
+
+        /* If a late job is dropped while holding SRP resources, release them
+         * and recalculate system ceiling to avoid permanently elevated ceiling. */
+        for( uxResourceIndex = 0U; uxResourceIndex < configMAX_SRP_RESOURCES; uxResourceIndex++ )
+        {
+            SRPResourceControl_t * pxRes = &( xSRPResources[ uxResourceIndex ] );
+            if( ( pxRes->xInUse != pdFALSE ) &&
+                ( pxRes->xCurrentHolder == ( TaskHandle_t ) pxTCB ) &&
+                ( pxRes->uxCurrentHolderUnits > 0U ) )
+            {
+                pxRes->uxAvailableUnits += pxRes->uxCurrentHolderUnits;
+                pxRes->uxCurrentHolderUnits = 0U;
+                pxRes->xCurrentHolder = NULL;
+                pxRes->uxCurrentHolderLevel = 0U;
+            }
+        }
+
+        pxTCB->uxSRPHeldResources = 0U;
+        ( void ) prvSRPRecalculateSystemCeiling();
+    }
+    #endif
 
     /* Advance to next job window. */
     pxTCB->xLastReleaseTick += pxTCB->xPeriod;
@@ -1612,10 +1726,10 @@ Add this in tick path (after tick increments and before/around schedule decision
 
 ```c
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    if( ( pxCurrentTCB->xPeriod > 0U ) && ( xTickCount > pxCurrentTCB->xAbsoluteDeadline ) )
+    if( ( pxCurrentTCB->xPeriod > 0U ) && ( xConstTickCount > pxCurrentTCB->xAbsoluteDeadline ) )
     {
         /* Deadline passed while job still active -> immediate drop policy. */
-        prvEDFDropLateJob( pxCurrentTCB, xTickCount );
+        prvEDFDropLateJob( pxCurrentTCB, xConstTickCount );
         xSwitchRequired = pdTRUE;
     }
 #endif
@@ -3246,42 +3360,41 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
 
 When an aperiodic event occurs (e.g., button press) and the CBS task transitions from blocked to ready, we need to check if the current budget/deadline is still valid.
 
-**File:** `tasks.c` -- add this check in **two places**:
+**Important:** Not all unblock paths use `xTaskRemoveFromEventList`. In particular, task notifications (`xTaskNotifyGive`, `xTaskNotifyGiveFromISR`, and generic notify APIs) unblock tasks directly in notification code paths. Therefore, implement CBS job-arrival refresh as a shared helper and call it on **every** path that moves a blocked task to ready.
+
+**File:** `tasks.c` -- add this check through a shared helper, then call it in these places:
 1. In `xTaskIncrementTick`, right **before** `prvAddTaskToReadyList( pxTCB )` is called for tasks unblocked from the delayed list.
 2. In `xTaskRemoveFromEventList`, right **before** the task is added to the ready list (or pending ready list).
+3. In notification unblock paths, right before adding the task to ready:
+   - `xTaskGenericNotify`
+   - `xTaskGenericNotifyFromISR`
+   - `vTaskGenericNotifyGiveFromISR`
 
 ```c
 #if ( configUSE_CBS == 1 )
-    /* CBS job arrival check: when a CBS task wakes up (becomes ready),
-     * check if its current budget and deadline are still valid using the
-     * correct CBS bandwidth equation: c >= (d - a) * U */
-    if( pxTCB->xIsCBSTask == pdTRUE )
+    static void prvCBSRefreshServerOnJobArrival( TCB_t * pxTCB,
+                                                  TickType_t xCurrentTime )
     {
-        TickType_t xCurrentTime = xTickCount;
-
-        /* If deadline has passed, the difference (d-a) would be underflow/negative. 
-         * Otherwise, check if current_budget >= (server_deadline - current_time) * (Q_s / T_s).
-         * To avoid floating point math, we re-arrange the inequality:
-         * c * T_s >= (d - a) * Q_s
-         * Cast to uint64_t to prevent 32-bit arithmetic overflows!
-         */
-        if( ( xCurrentTime >= pxTCB->xCBSDeadline ) ||
-            ( ( ( uint64_t ) pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod ) >= 
-              ( ( uint64_t ) ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget ) ) )
+        if( pxTCB->xIsCBSTask == pdTRUE )
         {
-            /* Bandwidth check failed or deadline passed while the task was
-             * sleeping. Assign a fresh deadline and full budget.
-             * This prevents the server from exceeding its allocated bandwidth. */
-            pxTCB->xCBSDeadline = xCurrentTime + pxTCB->xCBSPeriod;
-            pxTCB->xCBSCurrentBudget = pxTCB->xCBSMaxBudget;
-        }
-        /* else: the task still has budget left, the deadline hasn't passed,
-         * and the bandwidth check passes. Keep the existing deadline and 
-         * remaining budget. This is efficient -- the task can use leftover budget safely. */
+            /* If deadline has passed, the difference (d-a) would be underflow/negative.
+             * Otherwise, check c * T_s >= (d - a) * Q_s (integer form of CBS bandwidth test).
+             */
+            if( ( xCurrentTime >= pxTCB->xCBSDeadline ) ||
+                ( ( ( uint64_t ) pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod ) >=
+                  ( ( uint64_t ) ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget ) ) )
+            {
+                pxTCB->xCBSDeadline = xCurrentTime + pxTCB->xCBSPeriod;
+                pxTCB->xCBSCurrentBudget = pxTCB->xCBSMaxBudget;
+            }
 
-        /* Update the EDF deadline to match the CBS deadline. */
-        pxTCB->xAbsoluteDeadline = pxTCB->xCBSDeadline;
+            /* Keep EDF key aligned with CBS virtual deadline. */
+            pxTCB->xAbsoluteDeadline = pxTCB->xCBSDeadline;
+        }
     }
+
+    /* Example call site (repeat in every unblock path listed above). */
+    prvCBSRefreshServerOnJobArrival( pxTCB, xTickCount );
 #endif
 ```
 
@@ -3440,7 +3553,7 @@ void main_cbs_test( void )
 |------|--------|
 | `tasks.c` | Add `xIsCBSTask`, `xCBSMaxBudget`, `xCBSCurrentBudget`, `xCBSPeriod`, `xCBSDeadline` to TCB |
 | `tasks.c` | Budget tracking in `xTaskIncrementTick` (decrement budget, postpone deadline on exhaustion) |
-| `tasks.c` | Job arrival check when CBS task unblocks (refresh deadline/budget if expired) — in `xTaskIncrementTick` and `xTaskRemoveFromEventList` |
+| `tasks.c` | Job arrival check when CBS task unblocks (refresh deadline/budget if expired) — implemented via shared helper and called from `xTaskIncrementTick`, `xTaskRemoveFromEventList`, and notify unblock paths (`xTaskGenericNotify`, `xTaskGenericNotifyFromISR`, `vTaskGenericNotifyGiveFromISR`) |
 | `tasks.c` | CBS tie-breaking in `prvAddTaskToReadyList` (CBS tasks sort before periodic tasks at same deadline) |
 | `tasks.c` | Implement `xTaskCreateCBS()` function |
 | `task.h` | Declare `xTaskCreateCBS` with full documentation |
