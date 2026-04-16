@@ -99,11 +99,11 @@
 #define configPRINTF( x )           printf x
 
 /* Begin FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
-#define configUSE_CBS    0    /* Enable Constant Bandwidth Server */
+#define configUSE_CBS    1    /* Enable Constant Bandwidth Server */
 /* End FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
 
 /* FreeRTOS CPSC_538G related configs*/
-#define configUSE_SRP    1    /* Enable Stack Resource Policy */
+#define configUSE_SRP    0    /* Enable Stack Resource Policy */
 #define configMAX_SRP_RESOURCES 8
 #define configMAX_SRP_USERS_PER_RESOURCE 16
 #define configEDF_MAX_ANALYSIS_TICKS 100000U
