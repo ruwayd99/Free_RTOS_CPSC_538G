@@ -103,22 +103,46 @@ target_include_directories(main_blinky PRIVATE
 target_link_libraries(main_blinky pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap1)
 pico_add_extra_outputs(main_blinky)
 
-# EDF test target (from Assignment Guide Section 5)
-add_executable(main_edf_test
+# # EDF test target (from Assignment Guide Section 5)
+# add_executable(main_edf_test
+#         main.c
+#         main_edf_test.c
+#         )
+
+# target_compile_definitions(main_edf_test PRIVATE
+#         mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
+#         mainCREATE_EDF_TEST=1
+#         )
+
+# target_include_directories(main_edf_test PRIVATE
+#         ${CMAKE_CURRENT_LIST_DIR}
+#         ${FREERTOS_DEMO_PATH}/Common/include)
+
+# target_compile_options(main_edf_test PRIVATE
+#         $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
+#         $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
+#         $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
+#         )
+
+# target_link_libraries(main_edf_test pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+# pico_add_extra_outputs(main_edf_test)
+
+
+add_executable(main_cbs_test
         main.c
-        main_edf_test.c
+        main_cbs_test.c
         )
 
-target_compile_definitions(main_edf_test PRIVATE
+target_compile_definitions(main_cbs_test PRIVATE
         mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
+        mainCREATE_CBS_TEST=1
         )
 
-target_include_directories(main_edf_test PRIVATE
+target_include_directories(main_cbs_test PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
         ${FREERTOS_DEMO_PATH}/Common/include)
 
-target_compile_options(main_edf_test PRIVATE
+target_compile_options(main_cbs_test PRIVATE
         $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
         $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
         $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
@@ -264,3 +288,8 @@ target_compile_options(main_srp_test_100 PRIVATE
 
 target_link_libraries(main_srp_test_100 pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
 pico_add_extra_outputs(main_srp_test_100)
+
+
+
+target_link_libraries(main_cbs_test pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+pico_add_extra_outputs(main_cbs_test)
