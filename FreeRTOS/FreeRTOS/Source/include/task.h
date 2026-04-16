@@ -328,6 +328,22 @@ typedef enum
     /* Returns the lifetime count of EDF task creation attempts that were
      * rejected by the admission controller. */
     UBaseType_t uxTaskGetEDFRejectedCount( void );
+
+    /* Like xTaskCreateEDF but the task stack lives in puxStackBuffer (caller-
+     * owned, NOT heap-allocated).  Tasks at the same SRP preemption level
+     * never execute simultaneously, so they can safely share one static buffer.
+     * Heap cost per task = sizeof(TCB_t) only (no stack allocation). */
+    BaseType_t xTaskCreateEDFWithStack(
+        TaskFunction_t pxTaskCode,
+        const char * const pcName,
+        const configSTACK_DEPTH_TYPE uxStackDepth,
+        void * const pvParameters,
+        TickType_t xPeriod,
+        TickType_t xRelativeDeadline,
+        TickType_t xWcetTicks,
+        StackType_t * const puxStackBuffer,
+        TaskHandle_t * const pxCreatedTask
+    );
 #endif
 
 #if ( configUSE_SRP == 1 )

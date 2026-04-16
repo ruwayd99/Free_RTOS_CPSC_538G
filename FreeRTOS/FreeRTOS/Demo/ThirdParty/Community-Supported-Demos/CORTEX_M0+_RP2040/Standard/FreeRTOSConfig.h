@@ -108,6 +108,12 @@
 #define configMAX_SRP_USERS_PER_RESOURCE 16
 #define configEDF_MAX_ANALYSIS_TICKS 100000U
 
+/* SRP stack-sharing demo toggle.
+ *   0 = each task gets its own heap-allocated stack  (default)
+ *   1 = tasks in same preemption-level group share one static stack buffer
+ * Change this value, rebuild, and reflash to compare heap usage. */
+#define configSRP_STACK_SHARING    0
+
 /* Interrupt nesting behaviour configuration. */
 /*
 #define configKERNEL_INTERRUPT_PRIORITY         [dependent of processor]

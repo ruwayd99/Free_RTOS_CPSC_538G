@@ -1206,6 +1206,16 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                                   TaskHandle_t * const pxCreatedTask ) PRIVILEGED_FUNCTION;
 #endif /* #if ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) */
 
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    static TCB_t * prvCreateTaskWithStack( TaskFunction_t pxTaskCode,
+                                           const char * const pcName,
+                                           const configSTACK_DEPTH_TYPE uxStackDepth,
+                                           void * const pvParameters,
+                                           UBaseType_t uxPriority,
+                                           StackType_t * const puxStackBuffer,
+                                           TaskHandle_t * const pxCreatedTask ) PRIVILEGED_FUNCTION;
+#endif /* configUSE_EDF_SCHEDULING */
+
 /*
  * freertos_tasks_c_additions_init() should only be called if the user definable
  * macro FREERTOS_TASKS_C_ADDITIONS_INIT() is defined, as that is the only macro
@@ -1836,7 +1846,144 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
     return xReturn;
 }
-#endif
+#endif /* configUSE_EDF_SCHEDULING - xTaskCreateEDF */
+
+/*-----------------------------------------------------------*/
+
+/* xTaskCreateEDFWithStack – identical to xTaskCreateEDF but the task stack is
+ * taken from puxStackBuffer (caller-owned) rather than the heap.  Multiple
+ * tasks in the same SRP preemption-level group can pass the same static buffer
+ * so their combined heap cost is one TCB (not TCB + stack) per task. */
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    BaseType_t xTaskCreateEDFWithStack( TaskFunction_t pxTaskCode,
+                                        const char * const pcName,
+                                        const configSTACK_DEPTH_TYPE uxStackDepth,
+                                        void * const pvParameters,
+                                        TickType_t xPeriod,
+                                        TickType_t xRelativeDeadline,
+                                        TickType_t xWcetTicks,
+                                        StackType_t * const puxStackBuffer,
+                                        TaskHandle_t * const pxCreatedTask )
+    {
+        TCB_t * pxNewTCB;
+        BaseType_t xReturn = pdFAIL;
+        BaseType_t xYieldRequired = pdFALSE;
+        const char * pcReason = "UNKNOWN";
+        EDFAdmissionTaskParams_t xCandidate;
+
+        if( ( xPeriod == 0U ) || ( xRelativeDeadline == 0U ) || ( xWcetTicks == 0U ) )
+        {
+            prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, "zero parameter" );
+            return pdFAIL;
+        }
+
+        if( xRelativeDeadline > xPeriod )
+        {
+            prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, "D > T not supported" );
+            return pdFAIL;
+        }
+
+        xCandidate.xC = xWcetTicks;
+        xCandidate.xT = xPeriod;
+        xCandidate.xD = xRelativeDeadline;
+        #if ( configUSE_SRP == 1 )
+            xCandidate.uxLevel = prvSRPCalculateTaskPreemptionLevel( xRelativeDeadline );
+            xCandidate.xB = prvSRPComputeBlockingBoundForLevel( xCandidate.uxLevel );
+        #else
+            xCandidate.uxLevel = 0U;
+            xCandidate.xB = 0U;
+        #endif
+        xCandidate.pcName = pcName;
+
+        taskENTER_CRITICAL();
+        {
+            if( pxDelayedTaskList == NULL )
+            {
+                prvInitialiseTaskLists();
+            }
+
+            if( prvEDFAdmissionControl( &xCandidate, &pcReason ) == pdPASS )
+            {
+                pxNewTCB = prvCreateTaskWithStack( pxTaskCode,
+                                                   pcName,
+                                                   uxStackDepth,
+                                                   pvParameters,
+                                                   tskIDLE_PRIORITY + 1U,
+                                                   puxStackBuffer,
+                                                   pxCreatedTask );
+
+                if( pxNewTCB != NULL )
+                {
+                    pxNewTCB->xPeriod           = xPeriod;
+                    pxNewTCB->xRelativeDeadline = xRelativeDeadline;
+                    pxNewTCB->xWcetTicks        = xWcetTicks;
+                    pxNewTCB->xSRPBlockingBound = xCandidate.xB;
+                    pxNewTCB->xLastReleaseTick  = xTaskGetTickCount();
+                    pxNewTCB->xAbsoluteDeadline = pxNewTCB->xLastReleaseTick + xRelativeDeadline;
+                    pxNewTCB->xJobExecTicks     = 0U;
+                    pxNewTCB->uxEDFFlags        = 0U;
+
+                    #if ( configUSE_SRP == 1 )
+                        pxNewTCB->uxPreemptionLevel = xCandidate.uxLevel;
+                    #endif
+
+                    prvAddNewTaskToReadyList( pxNewTCB );
+                    vListInsertEnd( &xEDFTaskRegistryList, &( pxNewTCB->xEDFRegistryListItem ) );
+                    uxEDFAcceptedTaskCount++;
+
+                    prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline,
+                                         pdPASS, "admitted(shared-stack)" );
+                    edfTRACE( "[EDF][tick=%lu][task-add] task=%s mode=%s\r\n",
+                              ( unsigned long ) xTaskGetTickCount(),
+                              pcName,
+                              ( xTaskGetSchedulerState() == taskSCHEDULER_RUNNING ) ? "runtime" : "pre-start" );
+
+                    #if ( configUSE_SRP == 1 )
+                        srpTRACE( "[SRP][task-meta] task=%s level=%lu B=%lu\r\n",
+                                  pcName,
+                                  ( unsigned long ) pxNewTCB->uxPreemptionLevel,
+                                  ( unsigned long ) pxNewTCB->xSRPBlockingBound );
+                    #endif
+
+                    if( xSchedulerRunning != pdFALSE )
+                    {
+                        if( ( pxCurrentTCB == NULL ) ||
+                            ( pxCurrentTCB->xPeriod == 0U ) ||
+                            ( pxNewTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
+                        {
+                            xYieldRequired = pdTRUE;
+                        }
+                    }
+
+                    xReturn = pdPASS;
+                }
+                else
+                {
+                    prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline,
+                                         pdFAIL, "allocation failed" );
+                    xReturn = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+                }
+            }
+            else
+            {
+                uxEDFRejectedTaskCount++;
+                prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, pcReason );
+                xReturn = pdFAIL;
+            }
+        }
+        taskEXIT_CRITICAL();
+
+        if( xYieldRequired != pdFALSE )
+        {
+            taskYIELD_WITHIN_API();
+        }
+
+        return xReturn;
+    }
+#endif /* configUSE_EDF_SCHEDULING - xTaskCreateEDFWithStack */
+
+/*-----------------------------------------------------------*/
+
 #if ( configSUPPORT_STATIC_ALLOCATION == 1 )
 
     static TCB_t * prvCreateStaticTask( TaskFunction_t pxTaskCode,
@@ -2301,6 +2448,52 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
         return pxNewTCB;
     }
+/*-----------------------------------------------------------*/
+
+/* FreeRTOS CPSC_538G SRP stack-sharing support.
+ * Creates a TCB from heap but uses a caller-supplied stack buffer so the
+ * stack does NOT consume heap memory.  All tasks in the same preemption-
+ * level group can pass the same buffer, sharing one physical stack. */
+#if ( configUSE_EDF_SCHEDULING == 1 )
+    static TCB_t * prvCreateTaskWithStack( TaskFunction_t pxTaskCode,
+                                           const char * const pcName,
+                                           const configSTACK_DEPTH_TYPE uxStackDepth,
+                                           void * const pvParameters,
+                                           UBaseType_t uxPriority,
+                                           StackType_t * const puxStackBuffer,
+                                           TaskHandle_t * const pxCreatedTask )
+    {
+        TCB_t * pxNewTCB;
+
+        configASSERT( puxStackBuffer != NULL );
+
+        /* Allocate only the TCB from the heap; the stack is provided by the
+         * caller and is NOT freed when the task is deleted (it is owned by
+         * the caller's static buffer). */
+        /* MISRA Ref 11.5.1 [Malloc memory assignment] */
+        /* coverity[misra_c_2012_rule_11_5_violation] */
+        pxNewTCB = ( TCB_t * ) pvPortMalloc( sizeof( TCB_t ) );
+
+        if( pxNewTCB != NULL )
+        {
+            ( void ) memset( ( void * ) pxNewTCB, 0x00, sizeof( TCB_t ) );
+            pxNewTCB->pxStack = puxStackBuffer;
+
+            #if ( tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE != 0 )
+            {
+                /* Mark as statically-allocated stack so the stack pointer is
+                 * not freed on vTaskDelete, but the TCB is freed normally. */
+                pxNewTCB->ucStaticallyAllocated = tskSTATICALLY_ALLOCATED_STACK_ONLY;
+            }
+            #endif
+
+            prvInitialiseNewTask( pxTaskCode, pcName, uxStackDepth, pvParameters,
+                                  uxPriority, pxCreatedTask, pxNewTCB, NULL );
+        }
+
+        return pxNewTCB;
+    }
+#endif /* configUSE_EDF_SCHEDULING */
 /*-----------------------------------------------------------*/
 
     BaseType_t xTaskCreate( TaskFunction_t pxTaskCode,
@@ -7036,9 +7229,33 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
                 continue;
             }
 
+            /* Determine the holder's preemption level so we can skip it.
+             * Under SRP, the holder should never block itself — counting
+             * its own registration as "blocked" would raise the ceiling
+             * to the holder's own level, preventing it from acquiring
+             * any other resource (level > sysceil check fails when
+             * level == sysceil). */
+            UBaseType_t uxHolderLevel = 0U;
+            BaseType_t  xHasHolder = pdFALSE;
+
+            if( pxRes->xCurrentHolder != NULL )
+            {
+                uxHolderLevel = pxRes->uxCurrentHolderLevel;
+                xHasHolder = pdTRUE;
+            }
+
             for( uxUserIndex = 0U; uxUserIndex < pxRes->uxUserCount; uxUserIndex++ )
             {
                 const SRPUserRegistration_t * pxUser = &( pxRes->xUsers[ uxUserIndex ] );
+
+                /* Skip registrations at the holder's preemption level.
+                 * The holder already owns units and should not be
+                 * considered "blocked" on the resource it holds. */
+                if( ( xHasHolder == pdTRUE ) &&
+                    ( pxUser->uxPreemptionLevel == uxHolderLevel ) )
+                {
+                    continue;
+                }
 
                 if( pxUser->uxUnitsNeeded > pxRes->uxAvailableUnits )
                 {
