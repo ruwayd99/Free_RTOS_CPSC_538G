@@ -3014,6 +3014,32 @@ void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime )
 }
 #endif
 
+/* Begin FreeRTOS CPSC_538G related - CBS - Centralize job-arrival refresh */
+#if ( configUSE_CBS == 1 )
+    static void prvCBSRefreshServerOnJobArrival( TCB_t * pxTCB,
+                                                  TickType_t xCurrentTime )
+    {
+        configASSERT( pxTCB != NULL );
+
+        if( pxTCB->xIsCBSTask == pdTRUE )
+        {
+            uint64_t lhs = ( uint64_t ) pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod;
+            uint64_t rhs = ( uint64_t ) ( pxTCB->xCBSDeadline - xCurrentTime ) * pxTCB->xCBSMaxBudget;
+
+            /* CBS bandwidth check: c * Ts >= (d - now) * Qs, or refresh if deadline passed. */
+            if( ( xCurrentTime >= pxTCB->xCBSDeadline ) || ( lhs >= rhs ) )
+            {
+                pxTCB->xCBSDeadline = xCurrentTime + pxTCB->xCBSPeriod;
+                pxTCB->xCBSCurrentBudget = pxTCB->xCBSMaxBudget;
+            }
+
+            /* Always keep EDF key aligned with current CBS deadline. */
+            pxTCB->xAbsoluteDeadline = pxTCB->xCBSDeadline;
+        }
+    }
+#endif
+/* End FreeRTOS CPSC_538G related - CBS - Centralize job-arrival refresh */
+
 #if ( INCLUDE_xTaskDelayUntil == 1 )
 
     BaseType_t xTaskDelayUntil( TickType_t * const pxPreviousWakeTime,
@@ -5420,6 +5446,12 @@ BaseType_t xTaskIncrementTick( void )
                 {
                     /* Each tick the CBS task runs costs 1 unit of budget. */
                     pxCurrentTCB->xCBSCurrentBudget--;
+
+                    if (pxCurrentTCB->xCBSCurrentBudget && pxCurrentTCB->xCBSCurrentBudget % 30 == 0) {
+                        cbsTRACE("[CBS][tick=%lu][budget_current] budget=%lu\r\n", 
+                            (unsigned long)xTickCount, 
+                            (unsigned long) pxCurrentTCB->xCBSCurrentBudget);
+                    }
                 }
 
                 if( pxCurrentTCB->xCBSCurrentBudget == 0 )
@@ -5519,44 +5551,11 @@ BaseType_t xTaskIncrementTick( void )
                         mtCOVERAGE_TEST_MARKER();
                     }
 
-                    /* Begin FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
+                    /* Begin FreeRTOS CPSC_538G related - CBS - Refresh server on delayed-list wake */
                     #if ( configUSE_CBS == 1 )
-                        /* CBS job arrival check: when a CBS task wakes up (becomes ready),
-                         * check if its current budget and deadline are still valid using the
-                         * correct CBS bandwidth equation: c >= (d - a) * U */
-                        if( pxTCB->xIsCBSTask == pdTRUE )
-                        {
-                            TickType_t xCurrentTime = xTickCount;
-                            uint64_t lhs = (uint64_t)pxTCB->xCBSCurrentBudget * pxTCB->xCBSPeriod;
-                            uint64_t rhs = (uint64_t)(pxTCB->xCBSDeadline - xCurrentTime) * pxTCB->xCBSMaxBudget;
-                            int bandwidth_check = ( xCurrentTime >= pxTCB->xCBSDeadline ) || ( lhs >= rhs );
-                            /* Begin FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
-                            cbsTRACE("[CBS][tick=%lu][job_arrival] task=%s cur_budget=%lu cur_deadline=%lu now=%lu Qs=%lu Ts=%lu check:%s lhs=%llu rhs=%llu\r\n",
-                                (unsigned long)xCurrentTime,
-                                pxTCB->pcTaskName,
-                                (unsigned long)pxTCB->xCBSCurrentBudget,
-                                (unsigned long)pxTCB->xCBSDeadline,
-                                (unsigned long)xCurrentTime,
-                                (unsigned long)pxTCB->xCBSMaxBudget,
-                                (unsigned long)pxTCB->xCBSPeriod,
-                                bandwidth_check ? "reset-deadline" : "keep-task",
-                                (unsigned long long)lhs,
-                                (unsigned long long)rhs);
-                            /* End FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
-                            if( bandwidth_check )
-                            {
-                                pxTCB->xCBSDeadline = xCurrentTime + pxTCB->xCBSPeriod;
-                                pxTCB->xCBSCurrentBudget = pxTCB->xCBSMaxBudget;
-                            }
-                            /* else: the task still has budget left, the deadline hasn't passed,
-                             * and the bandwidth check passes. Keep the existing deadline and 
-                             * remaining budget. This is efficient -- the task can use leftover budget safely. */
-
-                            /* Update the EDF deadline to match the CBS deadline. */
-                            pxTCB->xAbsoluteDeadline = pxTCB->xCBSDeadline;
-                        }
+                        prvCBSRefreshServerOnJobArrival( pxTCB, xTickCount );
                     #endif
-                    /* End FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
+                    /* End FreeRTOS CPSC_538G related - CBS - Refresh server on delayed-list wake */
 
                     /* Place the unblocked task into the appropriate ready
                      * list. */
@@ -5894,6 +5893,8 @@ BaseType_t xTaskIncrementTick( void )
 #if ( configNUMBER_OF_CORES == 1 )
     void vTaskSwitchContext( void )
     {
+        // TCB_t * pxPreviousTCB;
+
         traceENTER_vTaskSwitchContext();
 
         if( uxSchedulerSuspended != ( UBaseType_t ) 0U )
@@ -5950,7 +5951,24 @@ BaseType_t xTaskIncrementTick( void )
             /* MISRA Ref 11.5.3 [Void pointer assignment] */
             /* More details at: https://github.com/FreeRTOS/FreeRTOS-Kernel/blob/main/MISRA.md#rule-115 */
             /* coverity[misra_c_2012_rule_11_5_violation] */
+
+            // pxPreviousTCB = pxCurrentTCB;
             taskSELECT_HIGHEST_PRIORITY_TASK();
+
+            // #if ( configUSE_EDF_SCHEDULING == 1 )
+            // {
+            //     if( pxCurrentTCB != pxPreviousTCB )
+            //     {
+            //         edfTRACE( "[EDF][tick=%lu][switch] out=%s out_dl=%lu in=%s in_dl=%lu\r\n",
+            //                   ( unsigned long ) xTickCount,
+            //                   ( pxPreviousTCB != NULL ) ? pxPreviousTCB->pcTaskName : "(null)",
+            //                   ( unsigned long ) ( ( pxPreviousTCB != NULL ) ? pxPreviousTCB->xAbsoluteDeadline : 0U ),
+            //                   ( pxCurrentTCB != NULL ) ? pxCurrentTCB->pcTaskName : "(null)",
+            //                   ( unsigned long ) ( ( pxCurrentTCB != NULL ) ? pxCurrentTCB->xAbsoluteDeadline : 0U ) );
+            //     }
+            // }
+            // #endif
+
             traceTASK_SWITCHED_IN();
 
             /* Macro to inject port specific behaviour immediately after
@@ -5979,6 +5997,8 @@ BaseType_t xTaskIncrementTick( void )
 #else /* if ( configNUMBER_OF_CORES == 1 ) */
     void vTaskSwitchContext( BaseType_t xCoreID )
     {
+        // TCB_t * pxPreviousTCB;
+
         traceENTER_vTaskSwitchContext();
 
         /* Acquire both locks:
@@ -6047,7 +6067,24 @@ BaseType_t xTaskIncrementTick( void )
                 #endif
 
                 /* Select a new task to run. */
+                // pxPreviousTCB = pxCurrentTCBs[ xCoreID ];
                 taskSELECT_HIGHEST_PRIORITY_TASK( xCoreID );
+
+                // #if ( configUSE_EDF_SCHEDULING == 1 )
+                // {
+                //     if( pxCurrentTCBs[ xCoreID ] != pxPreviousTCB )
+                //     {
+                //         edfTRACE( "[EDF][tick=%lu][core=%ld][switch] out=%s out_dl=%lu in=%s in_dl=%lu\r\n",
+                //                   ( unsigned long ) xTickCount,
+                //                   ( long ) xCoreID,
+                //                   ( pxPreviousTCB != NULL ) ? pxPreviousTCB->pcTaskName : "(null)",
+                //                   ( unsigned long ) ( ( pxPreviousTCB != NULL ) ? pxPreviousTCB->xAbsoluteDeadline : 0U ),
+                //                   ( pxCurrentTCBs[ xCoreID ] != NULL ) ? pxCurrentTCBs[ xCoreID ]->pcTaskName : "(null)",
+                //                   ( unsigned long ) ( ( pxCurrentTCBs[ xCoreID ] != NULL ) ? pxCurrentTCBs[ xCoreID ]->xAbsoluteDeadline : 0U ) );
+                //     }
+                // }
+                // #endif
+
                 traceTASK_SWITCHED_IN();
 
                 /* Macro to inject port specific behaviour immediately after
@@ -6204,38 +6241,11 @@ BaseType_t xTaskRemoveFromEventList( const List_t * const pxEventList )
     configASSERT( pxUnblockedTCB );
     listREMOVE_ITEM( &( pxUnblockedTCB->xEventListItem ) );
 
-    /* Begin FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
+    /* Begin FreeRTOS CPSC_538G related - CBS - Refresh server on event-list wake */
     #if ( configUSE_CBS == 1 )
-        /* CBS job arrival check */
-        if( pxUnblockedTCB->xIsCBSTask == pdTRUE )
-        {
-            TickType_t xCurrentTime = xTickCount;
-            uint64_t lhs = (uint64_t)pxUnblockedTCB->xCBSCurrentBudget * pxUnblockedTCB->xCBSPeriod;
-            uint64_t rhs = (uint64_t)(pxUnblockedTCB->xCBSDeadline - xCurrentTime) * pxUnblockedTCB->xCBSMaxBudget;
-            int bandwidth_check = ( xCurrentTime >= pxUnblockedTCB->xCBSDeadline ) || ( lhs >= rhs );
-            /* Begin FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
-            cbsTRACE("[CBS][tick=%lu][job_arrival] task=%s cur_budget=%lu cur_deadline=%lu now=%lu Qs=%lu Ts=%lu check:%s lhs=%llu rhs=%llu\r\n",
-                (unsigned long)xCurrentTime,
-                pxUnblockedTCB->pcTaskName,
-                (unsigned long)pxUnblockedTCB->xCBSCurrentBudget,
-                (unsigned long)pxUnblockedTCB->xCBSDeadline,
-                (unsigned long)xCurrentTime,
-                (unsigned long)pxUnblockedTCB->xCBSMaxBudget,
-                (unsigned long)pxUnblockedTCB->xCBSPeriod,
-                bandwidth_check ? "reset-deadline" : "keep-task",
-                (unsigned long long)lhs,
-                (unsigned long long)rhs);
-            /* End FreeRTOS CPSC_538G related - CBS - Trace CBS job arrival and bandwidth check */
-            if( bandwidth_check )
-            {
-                pxUnblockedTCB->xCBSDeadline = xCurrentTime + pxUnblockedTCB->xCBSPeriod;
-                pxUnblockedTCB->xCBSCurrentBudget = pxUnblockedTCB->xCBSMaxBudget;
-            }
-
-            pxUnblockedTCB->xAbsoluteDeadline = pxUnblockedTCB->xCBSDeadline;
-        }
+        prvCBSRefreshServerOnJobArrival( pxUnblockedTCB, xTickCount );
     #endif
-    /* End FreeRTOS CPSC_538G related - CBS - Handle job arrival checks in scheduler */
+    /* End FreeRTOS CPSC_538G related - CBS - Refresh server on event-list wake */
 
     if( uxSchedulerSuspended == ( UBaseType_t ) 0U )
     {
@@ -9260,6 +9270,12 @@ TickType_t uxTaskResetEventItemValue( void )
              * notification then unblock it now. */
             if( ucOriginalNotifyState == taskWAITING_NOTIFICATION )
             {
+                /* Begin FreeRTOS CPSC_538G related - CBS - Refresh server on notify wake */
+                #if ( configUSE_CBS == 1 )
+                    prvCBSRefreshServerOnJobArrival( pxTCB, xTickCount );
+                #endif
+                /* End FreeRTOS CPSC_538G related - CBS - Refresh server on notify wake */
+
                 listREMOVE_ITEM( &( pxTCB->xStateListItem ) );
                 prvAddTaskToReadyList( pxTCB );
 
@@ -9402,6 +9418,12 @@ TickType_t uxTaskResetEventItemValue( void )
              * notification then unblock it now. */
             if( ucOriginalNotifyState == taskWAITING_NOTIFICATION )
             {
+                /* Begin FreeRTOS CPSC_538G related - CBS - Refresh server on notify-from-ISR wake */
+                #if ( configUSE_CBS == 1 )
+                    prvCBSRefreshServerOnJobArrival( pxTCB, xTickCount );
+                #endif
+                /* End FreeRTOS CPSC_538G related - CBS - Refresh server on notify-from-ISR wake */
+
                 /* The task should not have been on an event list. */
                 configASSERT( listLIST_ITEM_CONTAINER( &( pxTCB->xEventListItem ) ) == NULL );
 
@@ -9536,6 +9558,12 @@ TickType_t uxTaskResetEventItemValue( void )
              * notification then unblock it now. */
             if( ucOriginalNotifyState == taskWAITING_NOTIFICATION )
             {
+                /* Begin FreeRTOS CPSC_538G related - CBS - Refresh server on notify-give-from-ISR wake */
+                #if ( configUSE_CBS == 1 )
+                    prvCBSRefreshServerOnJobArrival( pxTCB, xTickCount );
+                #endif
+                /* End FreeRTOS CPSC_538G related - CBS - Refresh server on notify-give-from-ISR wake */
+
                 /* The task should not have been on an event list. */
                 configASSERT( listLIST_ITEM_CONTAINER( &( pxTCB->xEventListItem ) ) == NULL );
 
@@ -10157,6 +10185,7 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
     pxNewTCB = prvCreateTask( pxTaskCode, pcName, uxStackDepth, pvParameters,
                               tskIDLE_PRIORITY + 1, pxCreatedTask );
 
+    taskENTER_CRITICAL();
     if( pxNewTCB != NULL )
     {
         /* Mark this task as a CBS-managed aperiodic task. */
@@ -10173,13 +10202,17 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
          * at time 0 + T_s = T_s. */
         pxNewTCB->xCBSDeadline = xServerPeriod;
 
-        /* Set the EDF deadline to match the CBS deadline.
-         * This is what the EDF scheduler actually sorts by. */
+        /**
+         * Set EDF-based parameters
+         * 
+         *  Set the EDF deadline to match the CBS deadline.
+         *  This is what the EDF scheduler actually sorts by.
+         * 
+         *  The CBS task needs a non-zero xPeriod so prvAddTaskToReadyList
+         *  puts it in the EDF ready list (not the priority ready list).
+         *  We use the CBS period for this. 
+         */
         pxNewTCB->xAbsoluteDeadline = xServerPeriod;
-
-        /* The CBS task needs a non-zero xPeriod so prvAddTaskToReadyList
-         * puts it in the EDF ready list (not the priority ready list).
-         * We use the CBS period for this. */
         pxNewTCB->xPeriod = xServerPeriod;
         pxNewTCB->xRelativeDeadline = xServerPeriod;
 
@@ -10191,6 +10224,7 @@ BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
         xReturn = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
     }
 
+    taskEXIT_CRITICAL();
     return xReturn;
 }
 #endif
