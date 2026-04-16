@@ -342,10 +342,10 @@
         if( ( pxTCB )->xPeriod > 0 )                                                   \
         {                                                                              \
             TickType_t xSortKey = ( pxTCB )->xAbsoluteDeadline;                        \
-            /* CBS tie-breaking: if this is a CBS task, use deadline - 1              \
-             * as the sort key so it is placed BEFORE any periodic task               \
-             * with the same deadline. vListInsert sorts ascending, so               \
-             * a smaller value means earlier position in the list.                    \
+            /* CBS tie-breaking: if this is a CBS task, use deadline - 1               \
+             * as the sort key so it is placed BEFORE any periodic task                \
+             * with the same deadline. vListInsert sorts ascending, so                 \
+             * a smaller value means earlier position in the list.                     \
              * This implements the rule: "ties broken in favor of server." */          \
             if( ( configUSE_CBS == 1 ) && ( ( pxTCB )->xIsCBSTask == pdTRUE ) &&       \
                 ( xSortKey > 0 ) )                                                     \
@@ -484,10 +484,11 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
     #endif
 
     /* Begin FreeRTOS CPSC_538G related - CBS - Add CBS TCB fields */
+    
+    /* pdTRUE if this task is an aperiodic task managed by a CBS.
+     * pdFALSE for regular periodic tasks. */
+    BaseType_t xIsCBSTask;
     #if ( configUSE_CBS == 1 )
-        /* pdTRUE if this task is an aperiodic task managed by a CBS.
-         * pdFALSE for regular periodic tasks. */
-        BaseType_t xIsCBSTask;
 
         /* Q_s: Maximum budget per server period. This is the max number
          * of ticks the CBS task can use before its deadline is postponed.
