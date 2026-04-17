@@ -94,25 +94,50 @@
 #define configTIMER_TASK_STACK_DEPTH            1024
 
 /* FreeRTOS CPSC_538G related configs*/
-#define configUSE_EDF_SCHEDULING    1
-#define configEDF_TRACE_ENABLE      1
-#define configPRINTF( x )           printf x
+/* Begin FreeRTOS CPSC_538G related - SMP - Configurable EDF/SMP toggles */
+#ifndef configUSE_EDF_SCHEDULING
+	#define configUSE_EDF_SCHEDULING    1
+#endif
+
+#ifndef configEDF_TRACE_ENABLE
+	#define configEDF_TRACE_ENABLE      1
+#endif
+
+#ifndef configPRINTF
+	#define configPRINTF( x )           printf x
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - Configurable EDF/SMP toggles */
 
 /* Begin FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
-#define configUSE_CBS    0    /* Enable Constant Bandwidth Server */
+#ifndef configUSE_CBS
+	#define configUSE_CBS    0    /* Enable Constant Bandwidth Server */
+#endif
 /* End FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
 
 /* FreeRTOS CPSC_538G related configs*/
-#define configUSE_SRP    1    /* Enable Stack Resource Policy */
-#define configMAX_SRP_RESOURCES 8
-#define configMAX_SRP_USERS_PER_RESOURCE 16
-#define configEDF_MAX_ANALYSIS_TICKS 100000U
+#ifndef configUSE_SRP
+	#define configUSE_SRP    1    /* Enable Stack Resource Policy */
+#endif
+
+#ifndef configMAX_SRP_RESOURCES
+	#define configMAX_SRP_RESOURCES 8
+#endif
+
+#ifndef configMAX_SRP_USERS_PER_RESOURCE
+	#define configMAX_SRP_USERS_PER_RESOURCE 16
+#endif
+
+#ifndef configEDF_MAX_ANALYSIS_TICKS
+	#define configEDF_MAX_ANALYSIS_TICKS 100000U
+#endif
 
 /* SRP stack-sharing demo toggle.
  *   0 = each task gets its own heap-allocated stack  (default)
  *   1 = tasks in same preemption-level group share one static stack buffer
  * Change this value, rebuild, and reflash to compare heap usage. */
-#define configSRP_STACK_SHARING    0
+#ifndef configSRP_STACK_SHARING
+	#define configSRP_STACK_SHARING    0
+#endif
 
 /* Interrupt nesting behaviour configuration. */
 /*
@@ -122,9 +147,39 @@
 */
 
 /* SMP port only */
-#define configNUMBER_OF_CORES                   1
-#define configTICK_CORE                         0
-#define configRUN_MULTIPLE_PRIORITIES           0
+/* Begin FreeRTOS CPSC_538G related - SMP - Task 4 multiprocessor controls */
+#ifndef configNUMBER_OF_CORES
+	#define configNUMBER_OF_CORES                   1
+#endif
+
+#ifndef configTICK_CORE
+	#define configTICK_CORE                         0
+#endif
+
+#ifndef configRUN_MULTIPLE_PRIORITIES
+	#if ( configNUMBER_OF_CORES > 1 )
+		#define configRUN_MULTIPLE_PRIORITIES       1
+	#else
+		#define configRUN_MULTIPLE_PRIORITIES       0
+	#endif
+#endif
+
+#ifndef configUSE_CORE_AFFINITY
+	#if ( configNUMBER_OF_CORES > 1 )
+		#define configUSE_CORE_AFFINITY             1
+	#else
+		#define configUSE_CORE_AFFINITY             0
+	#endif
+#endif
+
+#ifndef configGLOBAL_EDF_ENABLE
+	#define configGLOBAL_EDF_ENABLE                 1
+#endif
+
+#ifndef configPARTITIONED_EDF_ENABLE
+	#define configPARTITIONED_EDF_ENABLE            0
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - Task 4 multiprocessor controls */
 
 /* RP2040 specific */
 #define configSUPPORT_PICO_SYNC_INTEROP         1

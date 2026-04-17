@@ -1,0 +1,137 @@
+/* Begin FreeRTOS CPSC_538G related - SMP - Task 4 global EDF migration/remove API test */
+#include <stdio.h>
+#include "FreeRTOS.h"
+#include "task.h"
+#include "pico/stdlib.h"
+#include "pico/platform.h"
+
+typedef struct
+{
+    const char * pcName;
+    int iPin;
+    TickType_t xWorkTicks;
+} SMPGlobalMigrationParams_t;
+
+static TaskHandle_t xHintedTaskHandle = NULL;
+static TaskHandle_t xPeerTaskHandle = NULL;
+
+static SMPGlobalMigrationParams_t xHintedParams = { "G_HINT", 14, pdMS_TO_TICKS( 90 ) };
+static SMPGlobalMigrationParams_t xPeerParams = { "G_PEER", 15, pdMS_TO_TICKS( 100 ) };
+
+static void prvBusyWorkTicks( TickType_t xDurationTicks )
+{
+    TickType_t xStart = xTaskGetTickCount();
+
+    while( ( xTaskGetTickCount() - xStart ) < xDurationTicks )
+    {
+        /* Intentional spin to create deterministic compute demand. */
+    }
+}
+
+static void vGlobalWorker( void * pvParameters )
+{
+    SMPGlobalMigrationParams_t * pxParams = ( SMPGlobalMigrationParams_t * ) pvParameters;
+    TickType_t xLastWake = xTaskGetTickCount();
+    uint32_t ulLastCore = UINT32_MAX;
+
+    for( ; ; )
+    {
+        uint32_t ulCore = get_core_num();
+
+        if( ulCore != ulLastCore )
+        {
+            printf( "[SMP][GLOBAL][worker] task=%s core=%lu tick=%lu\r\n",
+                    pxParams->pcName,
+                    ( unsigned long ) ulCore,
+                    ( unsigned long ) xTaskGetTickCount() );
+            ulLastCore = ulCore;
+        }
+
+        if( pxParams->iPin >= 0 )
+        {
+            gpio_put( pxParams->iPin, 1 );
+        }
+
+        prvBusyWorkTicks( pxParams->xWorkTicks );
+
+        if( pxParams->iPin >= 0 )
+        {
+            gpio_put( pxParams->iPin, 0 );
+        }
+
+        vTaskDelayUntilNextPeriod( &xLastWake );
+    }
+}
+
+static void vGlobalController( void * pvParameters )
+{
+    BaseType_t xMigrateResult;
+
+    ( void ) pvParameters;
+
+    vTaskDelay( pdMS_TO_TICKS( 3000 ) );
+
+    xMigrateResult = xTaskMigrateToCore( xHintedTaskHandle, 1 );
+    printf( "[SMP][GLOBAL][controller] migrate hinted->core1 result=%ld\r\n",
+            ( long ) xMigrateResult );
+
+    vTaskDelay( pdMS_TO_TICKS( 3000 ) );
+
+    vTaskRemoveFromCore( xPeerTaskHandle );
+    printf( "[SMP][GLOBAL][controller] removed peer task from scheduling set\r\n" );
+
+    for( ; ; )
+    {
+        vTaskDelay( pdMS_TO_TICKS( 10000 ) );
+    }
+}
+
+void main_edf_test( void )
+{
+    BaseType_t xHintedCreate;
+    BaseType_t xPeerCreate;
+
+    gpio_init( 14 );
+    gpio_set_dir( 14, GPIO_OUT );
+    gpio_init( 15 );
+    gpio_set_dir( 15, GPIO_OUT );
+
+    xHintedCreate = xTaskCreateEDFOnCore( vGlobalWorker,
+                                          xHintedParams.pcName,
+                                          256,
+                                          &xHintedParams,
+                                          pdMS_TO_TICKS( 1200 ),
+                                          pdMS_TO_TICKS( 1200 ),
+                                          pdMS_TO_TICKS( 300 ),
+                                          0,
+                                          &xHintedTaskHandle );
+
+    xPeerCreate = xTaskCreateEDF( vGlobalWorker,
+                                  xPeerParams.pcName,
+                                  256,
+                                  &xPeerParams,
+                                  pdMS_TO_TICKS( 1500 ),
+                                  pdMS_TO_TICKS( 1500 ),
+                                  pdMS_TO_TICKS( 350 ),
+                                  &xPeerTaskHandle );
+
+    ( void ) xTaskCreate( vGlobalController,
+                          "G_CTRL",
+                          256,
+                          NULL,
+                          tskIDLE_PRIORITY + 1U,
+                          NULL );
+
+    printf( "[SMP][GLOBAL][startup] hinted=%ld peer=%ld admitted=%lu rejected=%lu\r\n",
+            ( long ) xHintedCreate,
+            ( long ) xPeerCreate,
+            ( unsigned long ) uxTaskGetEDFAdmittedCount(),
+            ( unsigned long ) uxTaskGetEDFRejectedCount() );
+
+    vTaskStartScheduler();
+
+    for( ; ; )
+    {
+    }
+}
+/* End FreeRTOS CPSC_538G related - SMP - Task 4 global EDF migration/remove API test */

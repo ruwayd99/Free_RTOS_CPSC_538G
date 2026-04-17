@@ -72,6 +72,27 @@
     #define configUSE_EDF_SCHEDULING    0
 #endif
 
+/* Begin FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF mode defaults */
+#ifndef configGLOBAL_EDF_ENABLE
+    #define configGLOBAL_EDF_ENABLE    0
+#endif
+
+#ifndef configPARTITIONED_EDF_ENABLE
+    #define configPARTITIONED_EDF_ENABLE    0
+#endif
+
+/* Default to global EDF when neither mode is explicitly selected. */
+#if ( configGLOBAL_EDF_ENABLE == 0 ) && ( configPARTITIONED_EDF_ENABLE == 0 )
+    #undef configGLOBAL_EDF_ENABLE
+    #define configGLOBAL_EDF_ENABLE    1
+#endif
+
+/* Prevent ambiguous dual-mode builds. */
+#if ( configGLOBAL_EDF_ENABLE == 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 )
+    #error configGLOBAL_EDF_ENABLE and configPARTITIONED_EDF_ENABLE cannot both be 1.
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF mode defaults */
+
 #ifndef configEDF_TRACE_ENABLE
     #define configEDF_TRACE_ENABLE    0
 #endif

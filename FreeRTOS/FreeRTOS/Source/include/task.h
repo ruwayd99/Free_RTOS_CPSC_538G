@@ -310,6 +310,27 @@ typedef enum
     );
 #endif
 
+/* Begin FreeRTOS CPSC_538G related - SMP - Task 4 public APIs */
+#if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) )
+    BaseType_t xTaskCreateEDFOnCore(
+        TaskFunction_t pxTaskCode,
+        const char * const pcName,
+        const configSTACK_DEPTH_TYPE uxStackDepth,
+        void * const pvParameters,
+        TickType_t xPeriod,
+        TickType_t xRelativeDeadline,
+        TickType_t xWcetTicks,
+        BaseType_t xCoreID,
+        TaskHandle_t * const pxCreatedTask
+    );
+
+    BaseType_t xTaskMigrateToCore( TaskHandle_t xTask,
+                                   BaseType_t xNewCoreID );
+
+    void vTaskRemoveFromCore( TaskHandle_t xTask );
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - Task 4 public APIs */
+
 /* FreeRTOS CPSC_538G related functions*/
 /* Function to delay until the next period in an EDF task*/
 #if ( configUSE_EDF_SCHEDULING == 1 )

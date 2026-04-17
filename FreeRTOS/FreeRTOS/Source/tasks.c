@@ -197,47 +197,53 @@
 /*-----------------------------------------------------------*/
 /* FreeRTOS CPSC_538G related task selection*/
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    #if ( configUSE_SRP == 1 )
-        static struct tskTaskControlBlock * prvEDFSelectRunnableTaskBySRP( void );
-        #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
-    do {                                                                              \
-        pxCurrentTCB = prvEDFSelectRunnableTaskBySRP();                               \
-                                                                                    \
-        if( pxCurrentTCB == NULL )                                                    \
-        {                                                                             \
-            UBaseType_t uxTopPriority = uxTopReadyPriority;                           \
-                                                                                    \
-            while( listLIST_IS_EMPTY( &( pxReadyTasksLists[ uxTopPriority ] ) ) != pdFALSE ) \
-            {                                                                         \
-                configASSERT( uxTopPriority );                                        \
-                --uxTopPriority;                                                      \
-            }                                                                         \
-                                                                                    \
-            listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB, &( pxReadyTasksLists[ uxTopPriority ] ) ); \
-            uxTopReadyPriority = uxTopPriority;                                       \
-        }                                                                             \
-    } while( 0 )
+    #if ( configNUMBER_OF_CORES == 1 )
+        #if ( configUSE_SRP == 1 )
+            static struct tskTaskControlBlock * prvEDFSelectRunnableTaskBySRP( void );
+            #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
+        do {                                                                              \
+            pxCurrentTCB = prvEDFSelectRunnableTaskBySRP();                               \
+                                                                                        \
+            if( pxCurrentTCB == NULL )                                                    \
+            {                                                                             \
+                UBaseType_t uxTopPriority = uxTopReadyPriority;                           \
+                                                                                        \
+                while( listLIST_IS_EMPTY( &( pxReadyTasksLists[ uxTopPriority ] ) ) != pdFALSE ) \
+                {                                                                         \
+                    configASSERT( uxTopPriority );                                        \
+                    --uxTopPriority;                                                      \
+                }                                                                         \
+                                                                                        \
+                listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB, &( pxReadyTasksLists[ uxTopPriority ] ) ); \
+                uxTopReadyPriority = uxTopPriority;                                       \
+            }                                                                             \
+        } while( 0 )
+        #else
+            #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
+        do {                                                                              \
+            if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )                         \
+            {                                                                             \
+                pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFReadyList ); \
+            }                                                                             \
+            else                                                                          \
+            {                                                                             \
+                UBaseType_t uxTopPriority = uxTopReadyPriority;                           \
+                                                                                        \
+                while( listLIST_IS_EMPTY( &( pxReadyTasksLists[ uxTopPriority ] ) ) != pdFALSE ) \
+                {                                                                         \
+                    configASSERT( uxTopPriority );                                        \
+                    --uxTopPriority;                                                      \
+                }                                                                         \
+                                                                                        \
+                listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB, &( pxReadyTasksLists[ uxTopPriority ] ) ); \
+                uxTopReadyPriority = uxTopPriority;                                       \
+            }                                                                             \
+        } while( 0 )
+        #endif
     #else
-        #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
-    do {                                                                              \
-        if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )                         \
-        {                                                                             \
-            pxCurrentTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFReadyList ); \
-        }                                                                             \
-        else                                                                          \
-        {                                                                             \
-            UBaseType_t uxTopPriority = uxTopReadyPriority;                           \
-                                                                                    \
-            while( listLIST_IS_EMPTY( &( pxReadyTasksLists[ uxTopPriority ] ) ) != pdFALSE ) \
-            {                                                                         \
-                configASSERT( uxTopPriority );                                        \
-                --uxTopPriority;                                                      \
-            }                                                                         \
-                                                                                    \
-            listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB, &( pxReadyTasksLists[ uxTopPriority ] ) ); \
-            uxTopReadyPriority = uxTopPriority;                                       \
-        }                                                                             \
-    } while( 0 )
+        /* Begin FreeRTOS CPSC_538G related - SMP - EDF selector hook for SMP */
+        #define taskSELECT_HIGHEST_PRIORITY_TASK( xCoreID )    prvSelectHighestPriorityTaskEDF( xCoreID )
+        /* End FreeRTOS CPSC_538G related - SMP - EDF selector hook for SMP */
     #endif
 #else
 /* Original macro (unchanged). */
@@ -336,33 +342,63 @@
  */
 #if ( configUSE_EDF_SCHEDULING == 1 )
     /* Begin FreeRTOS CPSC_538G related - CBS - Add tie-breaking to ready list */
-    #define prvAddTaskToReadyList( pxTCB )                                             \
-    do {                                                                               \
-        traceMOVED_TASK_TO_READY_STATE( pxTCB );                                       \
-        if( ( pxTCB )->xPeriod > 0 )                                                   \
-        {                                                                              \
-            TickType_t xSortKey = ( pxTCB )->xAbsoluteDeadline;                        \
-            /* CBS tie-breaking: if this is a CBS task, use deadline - 1               \
-             * as the sort key so it is placed BEFORE any periodic task                \
-             * with the same deadline. vListInsert sorts ascending, so                 \
-             * a smaller value means earlier position in the list.                     \
-             * This implements the rule: "ties broken in favor of server." */          \
-            if( ( configUSE_CBS == 1 ) && ( ( pxTCB )->xIsCBSTask == pdTRUE ) &&       \
-                ( xSortKey > 0 ) )                                                     \
-            {                                                                          \
-                xSortKey--;                                                            \
-            }                                                                          \
-            listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ), xSortKey );       \
-            vListInsert( &xEDFReadyList, &( ( pxTCB )->xStateListItem ) );             \
-        }                                                                              \
-        else                                                                           \
-        {                                                                              \
-            taskRECORD_READY_PRIORITY( ( pxTCB )->uxPriority );                        \
-            listINSERT_END( &( pxReadyTasksLists[ ( pxTCB )->uxPriority ] ),           \
-                            &( ( pxTCB )->xStateListItem ) );                          \
-        }                                                                              \
-        tracePOST_MOVED_TASK_TO_READY_STATE( pxTCB );                                  \
-    } while( 0 )
+    #if ( ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 ) )
+        /* Begin FreeRTOS CPSC_538G related - SMP - Partitioned EDF per-core ready list insert */
+        #define prvAddTaskToReadyList( pxTCB )                                             \
+        do {                                                                               \
+            traceMOVED_TASK_TO_READY_STATE( pxTCB );                                       \
+            if( ( pxTCB )->xPeriod > 0 )                                                   \
+            {                                                                              \
+                TickType_t xSortKey = ( pxTCB )->xAbsoluteDeadline;                        \
+                if( ( configUSE_CBS == 1 ) && ( ( pxTCB )->xIsCBSTask == pdTRUE ) &&       \
+                    ( xSortKey > 0 ) )                                                     \
+                {                                                                          \
+                    xSortKey--;                                                            \
+                }                                                                          \
+                listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ), xSortKey );       \
+                if( taskVALID_CORE_ID( ( pxTCB )->xAssignedCore ) != pdFALSE )             \
+                {                                                                          \
+                    vListInsert( &xEDFReadyListsByCore[ ( pxTCB )->xAssignedCore ],        \
+                                 &( ( pxTCB )->xStateListItem ) );                         \
+                }                                                                          \
+                else                                                                       \
+                {                                                                          \
+                    vListInsert( &xEDFReadyList, &( ( pxTCB )->xStateListItem ) );        \
+                }                                                                          \
+            }                                                                              \
+            else                                                                           \
+            {                                                                              \
+                taskRECORD_READY_PRIORITY( ( pxTCB )->uxPriority );                        \
+                listINSERT_END( &( pxReadyTasksLists[ ( pxTCB )->uxPriority ] ),           \
+                                &( ( pxTCB )->xStateListItem ) );                          \
+            }                                                                              \
+            tracePOST_MOVED_TASK_TO_READY_STATE( pxTCB );                                  \
+        } while( 0 )
+        /* End FreeRTOS CPSC_538G related - SMP - Partitioned EDF per-core ready list insert */
+    #else
+        #define prvAddTaskToReadyList( pxTCB )                                             \
+        do {                                                                               \
+            traceMOVED_TASK_TO_READY_STATE( pxTCB );                                       \
+            if( ( pxTCB )->xPeriod > 0 )                                                   \
+            {                                                                              \
+                TickType_t xSortKey = ( pxTCB )->xAbsoluteDeadline;                        \
+                if( ( configUSE_CBS == 1 ) && ( ( pxTCB )->xIsCBSTask == pdTRUE ) &&       \
+                    ( xSortKey > 0 ) )                                                     \
+                {                                                                          \
+                    xSortKey--;                                                            \
+                }                                                                          \
+                listSET_LIST_ITEM_VALUE( &( ( pxTCB )->xStateListItem ), xSortKey );       \
+                vListInsert( &xEDFReadyList, &( ( pxTCB )->xStateListItem ) );             \
+            }                                                                              \
+            else                                                                           \
+            {                                                                              \
+                taskRECORD_READY_PRIORITY( ( pxTCB )->uxPriority );                        \
+                listINSERT_END( &( pxReadyTasksLists[ ( pxTCB )->uxPriority ] ),           \
+                                &( ( pxTCB )->xStateListItem ) );                          \
+            }                                                                              \
+            tracePOST_MOVED_TASK_TO_READY_STATE( pxTCB );                                  \
+        } while( 0 )
+    #endif
     /* End FreeRTOS CPSC_538G related - CBS - Add tie-breaking to ready list */
 #else
     /* Original FreeRTOS macro (unchanged when EDF is disabled). */
@@ -472,6 +508,11 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
         TickType_t xJobExecTicks;       /* Execution consumed by current job (debug/admission stats). */
         UBaseType_t uxEDFFlags;         /* Bit flags (e.g., periodic task, job active, was preempted). */
         ListItem_t xEDFRegistryListItem;/* Dedicated list item for EDF registry membership. */
+        /* Begin FreeRTOS CPSC_538G related - SMP - EDF task core assignment metadata */
+        #if ( configNUMBER_OF_CORES > 1 )
+            BaseType_t xAssignedCore;   /* Partitioned EDF: fixed core assignment; -1 when unassigned/global. */
+        #endif
+        /* End FreeRTOS CPSC_538G related - SMP - EDF task core assignment metadata */
     #endif
 
     /* FreeRTOS CPSC_538G related fields*/
@@ -657,6 +698,14 @@ PRIVILEGED_DATA static List_t xPendingReadyList;                         /**< Ta
     /* Ready EDF jobs sorted by absolute deadline; head is next to run. */
     PRIVILEGED_DATA static List_t xEDFReadyList;
 
+    /* Begin FreeRTOS CPSC_538G related - SMP - Partitioned EDF ready queues and utilization state */
+    #if ( ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 ) )
+        PRIVILEGED_DATA static List_t xEDFReadyListsByCore[ configNUMBER_OF_CORES ];
+        PRIVILEGED_DATA static List_t xEDFPendingPartitionList;
+        PRIVILEGED_DATA static uint64_t ullEDFCoreUtilMicro[ configNUMBER_OF_CORES ] = { 0U };
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - Partitioned EDF ready queues and utilization state */
+
     /* Registry of all admitted EDF periodic tasks (ready + blocked + delayed).
      * Admission control must consider the whole accepted set, not just ready tasks. */
     PRIVILEGED_DATA static List_t xEDFTaskRegistryList;
@@ -769,6 +818,12 @@ static BaseType_t prvCreateIdleTasks( void );
  * Selects the highest priority available task for the given core.
  */
     static void prvSelectHighestPriorityTask( BaseType_t xCoreID );
+
+    /* Begin FreeRTOS CPSC_538G related - SMP - EDF-aware SMP task selector wrapper */
+    #if ( configUSE_EDF_SCHEDULING == 1 )
+        static void prvSelectHighestPriorityTaskEDF( BaseType_t xCoreID );
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - EDF-aware SMP task selector wrapper */
 #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
 
 /**
@@ -845,6 +900,27 @@ static void prvInitialiseTaskLists( void ) PRIVILEGED_FUNCTION;
     static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * pxCandidate,
                                                   const char ** ppcReason );
     static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow );
+
+    /* Begin FreeRTOS CPSC_538G related - SMP - EDF multiprocessor helpers */
+    #if ( configNUMBER_OF_CORES > 1 )
+        static uint64_t prvEDFUtilToMicro( TickType_t xC,
+                                           TickType_t xT );
+        static BaseType_t prvEDFAdmissionGlobalSMP( const EDFAdmissionTaskParams_t * pxCandidate,
+                                                    const char ** ppcReason );
+        static BaseType_t prvSMPSelectEDFTaskForCore( BaseType_t xCoreID,
+                                                      const List_t * pxReadyList,
+                                                      TCB_t ** ppxSelectedTCB );
+        static void prvSMPRequestRescheduleForEDF( void );
+
+        #if ( configPARTITIONED_EDF_ENABLE == 1 )
+            static BaseType_t prvEDFPartitionCanFitPendingSet( const char ** ppcReason );
+            static BaseType_t prvEDFPartitionAssignRuntimeTask( TCB_t * pxTCB,
+                                                                const char ** ppcReason );
+            static void prvEDFPartitionMovePendingTasksToReadyLists( void );
+            static void prvEDFPartitionRemoveTaskUtilization( const TCB_t * pxTCB );
+        #endif
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - EDF multiprocessor helpers */
 
     #if ( configUSE_SRP == 1 )
         static UBaseType_t prvSRPCalculateTaskPreemptionLevel( TickType_t xRelativeDeadline );
@@ -1053,6 +1129,318 @@ static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * p
     return pdPASS;
 }
 #endif
+
+/* Begin FreeRTOS CPSC_538G related - SMP - Forward declaration for pending-task commit helper */
+#if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) )
+    static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - Forward declaration for pending-task commit helper */
+
+/* Begin FreeRTOS CPSC_538G related - SMP - EDF multiprocessor helper implementations */
+#if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) )
+    static uint64_t prvEDFUtilToMicro( TickType_t xC,
+                                       TickType_t xT )
+    {
+        const uint64_t ullScale = 1000000ULL;
+
+        if( xT == 0U )
+        {
+            return ullScale + 1ULL;
+        }
+
+        return ( ( uint64_t ) xC * ullScale ) / ( uint64_t ) xT;
+    }
+
+    static BaseType_t prvEDFAdmissionGlobalSMP( const EDFAdmissionTaskParams_t * pxCandidate,
+                                                const char ** ppcReason )
+    {
+        const uint64_t ullOneCore = 1000000ULL;
+        uint64_t ullSumU = 0ULL;
+        uint64_t ullMaxU = 0ULL;
+        const ListItem_t * pxIt;
+        uint64_t ullCandidateU;
+
+        ullCandidateU = prvEDFUtilToMicro( pxCandidate->xC, pxCandidate->xT );
+
+        if( ullCandidateU > ullOneCore )
+        {
+            *ppcReason = "global U_i>1";
+            return pdFAIL;
+        }
+
+        ullSumU = ullCandidateU;
+        ullMaxU = ullCandidateU;
+
+        for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+             pxIt != listGET_END_MARKER( &xEDFTaskRegistryList );
+             pxIt = listGET_NEXT( pxIt ) )
+        {
+            const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+            uint64_t ullTaskU;
+
+            if( pxTCB->xPeriod == 0U )
+            {
+                continue;
+            }
+
+            ullTaskU = prvEDFUtilToMicro( pxTCB->xWcetTicks, pxTCB->xPeriod );
+
+            if( ullTaskU > ullOneCore )
+            {
+                *ppcReason = "global existing U_i>1";
+                return pdFAIL;
+            }
+
+            ullSumU += ullTaskU;
+
+            if( ullTaskU > ullMaxU )
+            {
+                ullMaxU = ullTaskU;
+            }
+        }
+
+        if( ullSumU > ( ( uint64_t ) configNUMBER_OF_CORES * ullOneCore ) )
+        {
+            *ppcReason = "global sumU>m";
+            return pdFAIL;
+        }
+
+        {
+            uint64_t ullBound = ( ( uint64_t ) configNUMBER_OF_CORES * ullOneCore ) -
+                                ( ( uint64_t ) ( configNUMBER_OF_CORES - 1 ) * ullMaxU );
+
+            if( ullSumU <= ullBound )
+            {
+                *ppcReason = "global GFB ok";
+                return pdPASS;
+            }
+        }
+
+        *ppcReason = "global GFB fail";
+        return pdFAIL;
+    }
+
+    static BaseType_t prvSMPSelectEDFTaskForCore( BaseType_t xCoreID,
+                                                  const List_t * pxReadyList,
+                                                  TCB_t ** ppxSelectedTCB )
+    {
+        const ListItem_t * pxEndMarker = listGET_END_MARKER( pxReadyList );
+        const ListItem_t * pxIterator;
+        TCB_t * pxCurrent = pxCurrentTCBs[ xCoreID ];
+
+        for( pxIterator = listGET_HEAD_ENTRY( pxReadyList );
+             pxIterator != pxEndMarker;
+             pxIterator = listGET_NEXT( pxIterator ) )
+        {
+            TCB_t * pxCandidate = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxIterator );
+
+            #if ( configUSE_CORE_AFFINITY == 1 )
+                if( ( pxCandidate->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) == 0U )
+                {
+                    continue;
+                }
+            #endif
+
+            if( ( pxCandidate == pxCurrent ) &&
+                ( ( pxCandidate->xTaskRunState == xCoreID ) ||
+                  ( pxCandidate->xTaskRunState == taskTASK_SCHEDULED_TO_YIELD ) ) )
+            {
+                *ppxSelectedTCB = pxCandidate;
+                return pdTRUE;
+            }
+
+            if( pxCandidate->xTaskRunState == taskTASK_NOT_RUNNING )
+            {
+                *ppxSelectedTCB = pxCandidate;
+                return pdTRUE;
+            }
+        }
+
+        *ppxSelectedTCB = NULL;
+        return pdFALSE;
+    }
+
+    #if ( configPARTITIONED_EDF_ENABLE == 1 )
+        static BaseType_t prvEDFPartitionCanFitPendingSet( const char ** ppcReason )
+        {
+            uint64_t ullTempUtil[ configNUMBER_OF_CORES ] = { 0U };
+            const List_t * const pxPendingList = &xEDFPendingPartitionList;
+            const ListItem_t * pxEndMarker = listGET_END_MARKER( pxPendingList );
+            const ListItem_t * pxIterator;
+
+            for( pxIterator = listGET_HEAD_ENTRY( pxPendingList );
+                 pxIterator != pxEndMarker;
+                 pxIterator = listGET_NEXT( pxIterator ) )
+            {
+                TCB_t * pxTCB = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxIterator );
+                uint64_t ullTaskU = prvEDFUtilToMicro( pxTCB->xWcetTicks, pxTCB->xPeriod );
+                BaseType_t xAssigned = pdFALSE;
+                BaseType_t xCoreID;
+
+                for( xCoreID = 0; xCoreID < ( BaseType_t ) configNUMBER_OF_CORES; xCoreID++ )
+                {
+                    if( ( ullTempUtil[ xCoreID ] + ullTaskU ) <= 1000000ULL )
+                    {
+                        ullTempUtil[ xCoreID ] += ullTaskU;
+                        pxTCB->xAssignedCore = xCoreID;
+                        xAssigned = pdTRUE;
+                        break;
+                    }
+                }
+
+                if( xAssigned == pdFALSE )
+                {
+                    *ppcReason = "partitioned no fit";
+                    return pdFAIL;
+                }
+            }
+
+            ( void ) memcpy( ( void * ) ullEDFCoreUtilMicro,
+                             ( const void * ) ullTempUtil,
+                             sizeof( ullEDFCoreUtilMicro ) );
+
+            *ppcReason = "partitioned fit";
+            return pdPASS;
+        }
+
+        static BaseType_t prvEDFPartitionAssignRuntimeTask( TCB_t * pxTCB,
+                                                            const char ** ppcReason )
+        {
+            uint64_t ullTaskU = prvEDFUtilToMicro( pxTCB->xWcetTicks, pxTCB->xPeriod );
+            BaseType_t xCoreID;
+
+            for( xCoreID = 0; xCoreID < ( BaseType_t ) configNUMBER_OF_CORES; xCoreID++ )
+            {
+                if( ( ullEDFCoreUtilMicro[ xCoreID ] + ullTaskU ) <= 1000000ULL )
+                {
+                    ullEDFCoreUtilMicro[ xCoreID ] += ullTaskU;
+                    pxTCB->xAssignedCore = xCoreID;
+                    pxTCB->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID );
+
+                    edfTRACE( "[EDF][tick=%lu][partition-bind] task=%s core=%ld Uu=%lu mode=runtime\r\n",
+                              ( unsigned long ) xTaskGetTickCount(),
+                              pxTCB->pcTaskName,
+                              ( long ) xCoreID,
+                              ( unsigned long ) ullTaskU );
+
+                    *ppcReason = "partitioned runtime fit";
+                    return pdPASS;
+                }
+            }
+
+            *ppcReason = "partitioned runtime no fit";
+            return pdFAIL;
+        }
+
+        static void prvEDFPartitionMovePendingTasksToReadyLists( void )
+        {
+            while( listLIST_IS_EMPTY( &xEDFPendingPartitionList ) == pdFALSE )
+            {
+                TCB_t * pxTCB = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFPendingPartitionList );
+
+                listREMOVE_ITEM( &( pxTCB->xStateListItem ) );
+                pxTCB->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) pxTCB->xAssignedCore );
+
+                edfTRACE( "[EDF][tick=%lu][partition-bind] task=%s core=%ld Uu=%lu mode=pre-start\r\n",
+                          ( unsigned long ) xTaskGetTickCount(),
+                          pxTCB->pcTaskName,
+                          ( long ) pxTCB->xAssignedCore,
+                          ( unsigned long ) prvEDFUtilToMicro( pxTCB->xWcetTicks, pxTCB->xPeriod ) );
+
+                prvAddNewTaskToReadyList( pxTCB );
+            }
+        }
+
+        static void prvEDFPartitionRemoveTaskUtilization( const TCB_t * pxTCB )
+        {
+            if( taskVALID_CORE_ID( pxTCB->xAssignedCore ) != pdFALSE )
+            {
+                uint64_t ullTaskU = prvEDFUtilToMicro( pxTCB->xWcetTicks, pxTCB->xPeriod );
+                BaseType_t xCoreID = pxTCB->xAssignedCore;
+
+                if( ullEDFCoreUtilMicro[ xCoreID ] >= ullTaskU )
+                {
+                    ullEDFCoreUtilMicro[ xCoreID ] -= ullTaskU;
+                }
+                else
+                {
+                    ullEDFCoreUtilMicro[ xCoreID ] = 0U;
+                }
+            }
+        }
+    #endif /* configPARTITIONED_EDF_ENABLE */
+
+    static void prvSelectHighestPriorityTaskEDF( BaseType_t xCoreID )
+    {
+        TCB_t * pxSelectedTCB = NULL;
+
+        #if ( configPARTITIONED_EDF_ENABLE == 1 )
+            if( prvSMPSelectEDFTaskForCore( xCoreID,
+                                            &xEDFReadyListsByCore[ xCoreID ],
+                                            &pxSelectedTCB ) != pdFALSE )
+        #else
+            if( prvSMPSelectEDFTaskForCore( xCoreID,
+                                            &xEDFReadyList,
+                                            &pxSelectedTCB ) != pdFALSE )
+        #endif
+        {
+            if( pxSelectedTCB != pxCurrentTCBs[ xCoreID ] )
+            {
+                if( ( pxCurrentTCBs[ xCoreID ] != NULL ) &&
+                    ( ( pxCurrentTCBs[ xCoreID ]->xTaskRunState == xCoreID ) ||
+                      ( pxCurrentTCBs[ xCoreID ]->xTaskRunState == taskTASK_SCHEDULED_TO_YIELD ) ) )
+                {
+                    pxCurrentTCBs[ xCoreID ]->xTaskRunState = taskTASK_NOT_RUNNING;
+                }
+
+                pxSelectedTCB->xTaskRunState = xCoreID;
+                pxCurrentTCBs[ xCoreID ] = pxSelectedTCB;
+            }
+            else
+            {
+                pxSelectedTCB->xTaskRunState = xCoreID;
+            }
+
+            return;
+        }
+
+        prvSelectHighestPriorityTask( xCoreID );
+    }
+
+    static void prvSMPRequestRescheduleForEDF( void )
+    {
+        BaseType_t xCoreID;
+
+        for( xCoreID = 0; xCoreID < ( BaseType_t ) configNUMBER_OF_CORES; xCoreID++ )
+        {
+            TCB_t * pxCandidate = NULL;
+            TCB_t * pxCurrent = pxCurrentTCBs[ xCoreID ];
+
+            #if ( configPARTITIONED_EDF_ENABLE == 1 )
+                ( void ) prvSMPSelectEDFTaskForCore( xCoreID,
+                                                     &xEDFReadyListsByCore[ xCoreID ],
+                                                     &pxCandidate );
+            #else
+                ( void ) prvSMPSelectEDFTaskForCore( xCoreID,
+                                                     &xEDFReadyList,
+                                                     &pxCandidate );
+            #endif
+
+            if( pxCandidate == NULL )
+            {
+                continue;
+            }
+
+            if( ( pxCurrent == NULL ) ||
+                ( pxCurrent->xPeriod == 0U ) ||
+                ( pxCurrent->xAbsoluteDeadline > pxCandidate->xAbsoluteDeadline ) )
+            {
+                prvYieldCore( xCoreID );
+            }
+        }
+    }
+#endif /* configUSE_EDF_SCHEDULING && configNUMBER_OF_CORES > 1 */
+/* End FreeRTOS CPSC_538G related - SMP - EDF multiprocessor helper implementations */
 
 /*
  * The idle task, which as all tasks is implemented as a never ending loop.
@@ -1758,6 +2146,7 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
     TCB_t * pxNewTCB;
     BaseType_t xReturn = pdFAIL;
     BaseType_t xYieldRequired = pdFALSE;
+    BaseType_t xAdmissionAccepted = pdFALSE;
     const char * pcReason = "UNKNOWN";
     EDFAdmissionTaskParams_t xCandidate;
 
@@ -1799,9 +2188,49 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
             prvInitialiseTaskLists();
         }
 
-        /* This works both pre-start and runtime, so requirement "accept new tasks
-         * while system is running" is satisfied by the same API path. */
-        if( prvEDFAdmissionControl( &xCandidate, &pcReason ) == pdPASS )
+        /* Begin FreeRTOS CPSC_538G related - SMP - Select admission test by mode */
+        #if ( configNUMBER_OF_CORES > 1 )
+            #if ( configPARTITIONED_EDF_ENABLE == 1 )
+                if( xSchedulerRunning == pdFALSE )
+                {
+                    xAdmissionAccepted = pdTRUE;
+                    pcReason = "partitioned pre-start pending";
+                }
+                else
+                {
+                    BaseType_t xCoreID;
+                    uint64_t ullCandidateU = prvEDFUtilToMicro( xCandidate.xC, xCandidate.xT );
+
+                    for( xCoreID = 0; xCoreID < ( BaseType_t ) configNUMBER_OF_CORES; xCoreID++ )
+                    {
+                        if( ( ullEDFCoreUtilMicro[ xCoreID ] + ullCandidateU ) <= 1000000ULL )
+                        {
+                            xAdmissionAccepted = pdTRUE;
+                            pcReason = "partitioned runtime fit";
+                            break;
+                        }
+                    }
+
+                    if( xAdmissionAccepted == pdFALSE )
+                    {
+                        pcReason = "partitioned runtime no fit";
+                    }
+                }
+            #else
+                if( prvEDFAdmissionGlobalSMP( &xCandidate, &pcReason ) == pdPASS )
+                {
+                    xAdmissionAccepted = pdTRUE;
+                }
+            #endif
+        #else
+            if( prvEDFAdmissionControl( &xCandidate, &pcReason ) == pdPASS )
+            {
+                xAdmissionAccepted = pdTRUE;
+            }
+        #endif
+        /* End FreeRTOS CPSC_538G related - SMP - Select admission test by mode */
+
+        if( xAdmissionAccepted != pdFALSE )
         {
             /* Allocate and initialize the task after admission says OK. */
             pxNewTCB = prvCreateTask( pxTaskCode,
@@ -1823,39 +2252,136 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                 pxNewTCB->xJobExecTicks = 0U;
                 pxNewTCB->uxEDFFlags = 0U;
 
+                #if ( configNUMBER_OF_CORES > 1 )
+                    pxNewTCB->xAssignedCore = taskTASK_NOT_RUNNING;
+                #endif
+
                 #if ( configUSE_SRP == 1 )
                     pxNewTCB->uxPreemptionLevel = xCandidate.uxLevel;
                 #endif
 
-                /* Add task to scheduler and internal EDF registry. */
-                prvAddNewTaskToReadyList( pxNewTCB );
+                /* Add task to internal EDF registry first for admission accounting. */
                 vListInsertEnd( &xEDFTaskRegistryList, &( pxNewTCB->xEDFRegistryListItem ) );
-                uxEDFAcceptedTaskCount++;
 
-                prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdPASS, "admitted" );
-                edfTRACE( "[EDF][tick=%lu][task-add] task=%s mode=%s\r\n",
-                          ( unsigned long ) xTaskGetTickCount(),
-                          pcName,
-                          ( xTaskGetSchedulerState() == taskSCHEDULER_RUNNING ) ? "runtime" : "pre-start" );
-
-                #if ( configUSE_SRP == 1 )
-                    srpTRACE( "[SRP][task-meta] task=%s level=%lu B=%lu\r\n",
-                              pcName,
-                              ( unsigned long ) pxNewTCB->uxPreemptionLevel,
-                              ( unsigned long ) pxNewTCB->xSRPBlockingBound );
-                #endif
-
-                if( xSchedulerRunning != pdFALSE )
-                {
-                    if( ( pxCurrentTCB == NULL ) ||
-                        ( pxCurrentTCB->xPeriod == 0U ) ||
-                        ( pxNewTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
+                #if ( ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 ) )
+                    if( xSchedulerRunning == pdFALSE )
                     {
-                        xYieldRequired = pdTRUE;
-                    }
-                }
+                        uint64_t ullTaskU = prvEDFUtilToMicro( pxNewTCB->xWcetTicks, pxNewTCB->xPeriod );
+                        TickType_t xSortKey;
 
-                xReturn = pdPASS;
+                        if( ullTaskU >= ( uint64_t ) portMAX_DELAY )
+                        {
+                            xSortKey = 0U;
+                        }
+                        else
+                        {
+                            xSortKey = ( TickType_t ) ( ( uint64_t ) portMAX_DELAY - ullTaskU );
+                        }
+
+                        listSET_LIST_ITEM_VALUE( &( pxNewTCB->xStateListItem ), xSortKey );
+                        vListInsert( &xEDFPendingPartitionList, &( pxNewTCB->xStateListItem ) );
+
+                        if( prvEDFPartitionCanFitPendingSet( &pcReason ) == pdPASS )
+                        {
+                            uxEDFAcceptedTaskCount++;
+                            prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdPASS, pcReason );
+                            edfTRACE( "[EDF][tick=%lu][task-add] task=%s mode=pre-start-pending\r\n",
+                                      ( unsigned long ) xTaskGetTickCount(),
+                                      pcName );
+                            xReturn = pdPASS;
+                        }
+                        else
+                        {
+                            ( void ) uxListRemove( &( pxNewTCB->xStateListItem ) );
+                            ( void ) uxListRemove( &( pxNewTCB->xEDFRegistryListItem ) );
+                            uxEDFRejectedTaskCount++;
+                            prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, pcReason );
+
+                            if( pxCreatedTask != NULL )
+                            {
+                                *pxCreatedTask = NULL;
+                            }
+
+                            prvDeleteTCB( pxNewTCB );
+                            xReturn = pdFAIL;
+                        }
+                    }
+                    else
+                    {
+                        if( prvEDFPartitionAssignRuntimeTask( pxNewTCB, &pcReason ) == pdPASS )
+                        {
+                            prvAddNewTaskToReadyList( pxNewTCB );
+                            uxEDFAcceptedTaskCount++;
+                            prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdPASS, pcReason );
+                            edfTRACE( "[EDF][tick=%lu][task-add] task=%s mode=runtime\r\n",
+                                      ( unsigned long ) xTaskGetTickCount(),
+                                      pcName );
+
+                            prvSMPRequestRescheduleForEDF();
+                            if( xYieldPendings[ portGET_CORE_ID() ] != pdFALSE )
+                            {
+                                xYieldRequired = pdTRUE;
+                            }
+
+                            xReturn = pdPASS;
+                        }
+                        else
+                        {
+                            ( void ) uxListRemove( &( pxNewTCB->xEDFRegistryListItem ) );
+                            uxEDFRejectedTaskCount++;
+                            prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdFAIL, pcReason );
+
+                            if( pxCreatedTask != NULL )
+                            {
+                                *pxCreatedTask = NULL;
+                            }
+
+                            prvDeleteTCB( pxNewTCB );
+                            xReturn = pdFAIL;
+                        }
+                    }
+                #else
+                    /* Add task to scheduler lists immediately. */
+                    prvAddNewTaskToReadyList( pxNewTCB );
+                    uxEDFAcceptedTaskCount++;
+
+                    prvEDFTraceAdmission( pcName, xWcetTicks, xPeriod, xRelativeDeadline, pdPASS, pcReason );
+                    edfTRACE( "[EDF][tick=%lu][task-add] task=%s mode=%s\r\n",
+                              ( unsigned long ) xTaskGetTickCount(),
+                              pcName,
+                              ( xTaskGetSchedulerState() == taskSCHEDULER_RUNNING ) ? "runtime" : "pre-start" );
+
+                    #if ( configUSE_SRP == 1 )
+                        srpTRACE( "[SRP][task-meta] task=%s level=%lu B=%lu\r\n",
+                                  pcName,
+                                  ( unsigned long ) pxNewTCB->uxPreemptionLevel,
+                                  ( unsigned long ) pxNewTCB->xSRPBlockingBound );
+                    #endif
+
+                    #if ( configNUMBER_OF_CORES > 1 )
+                        if( xSchedulerRunning != pdFALSE )
+                        {
+                            prvSMPRequestRescheduleForEDF();
+
+                            if( xYieldPendings[ portGET_CORE_ID() ] != pdFALSE )
+                            {
+                                xYieldRequired = pdTRUE;
+                            }
+                        }
+                    #else
+                        if( xSchedulerRunning != pdFALSE )
+                        {
+                            if( ( pxCurrentTCB == NULL ) ||
+                                ( pxCurrentTCB->xPeriod == 0U ) ||
+                                ( pxNewTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) )
+                            {
+                                xYieldRequired = pdTRUE;
+                            }
+                        }
+                    #endif
+
+                    xReturn = pdPASS;
+                #endif
             }
             else
             {
@@ -1880,6 +2406,202 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
     return xReturn;
 }
 #endif /* configUSE_EDF_SCHEDULING - xTaskCreateEDF */
+
+/*-----------------------------------------------------------*/
+
+/* Begin FreeRTOS CPSC_538G related - SMP - Task 4 API implementations */
+#if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) )
+    BaseType_t xTaskMigrateToCore( TaskHandle_t xTask,
+                                   BaseType_t xNewCoreID )
+    {
+        TCB_t * pxTCB;
+        BaseType_t xReturn = pdFAIL;
+
+        if( taskVALID_CORE_ID( xNewCoreID ) == pdFALSE )
+        {
+            return pdFAIL;
+        }
+
+        taskENTER_CRITICAL();
+        {
+            pxTCB = prvGetTCBFromHandle( xTask );
+            configASSERT( pxTCB != NULL );
+
+            if( pxTCB->xPeriod == 0U )
+            {
+                xReturn = pdFAIL;
+            }
+            else
+            {
+                #if ( configPARTITIONED_EDF_ENABLE == 1 )
+                {
+                    uint64_t ullTaskU = prvEDFUtilToMicro( pxTCB->xWcetTicks, pxTCB->xPeriod );
+                    BaseType_t xOldCore = pxTCB->xAssignedCore;
+
+                    if( xOldCore == xNewCoreID )
+                    {
+                        xReturn = pdPASS;
+                    }
+                    else
+                    {
+                        uint64_t ullTargetUtil = ullEDFCoreUtilMicro[ xNewCoreID ];
+
+                        if( taskVALID_CORE_ID( xOldCore ) != pdFALSE )
+                        {
+                            if( ullEDFCoreUtilMicro[ xOldCore ] >= ullTaskU )
+                            {
+                                ullEDFCoreUtilMicro[ xOldCore ] -= ullTaskU;
+                            }
+                            else
+                            {
+                                ullEDFCoreUtilMicro[ xOldCore ] = 0U;
+                            }
+                        }
+
+                        if( ( ullTargetUtil + ullTaskU ) <= 1000000ULL )
+                        {
+                            ullEDFCoreUtilMicro[ xNewCoreID ] = ullTargetUtil + ullTaskU;
+                            pxTCB->xAssignedCore = xNewCoreID;
+                            pxTCB->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) xNewCoreID );
+
+                            if( ( taskVALID_CORE_ID( xOldCore ) != pdFALSE ) &&
+                                ( listIS_CONTAINED_WITHIN( &xEDFReadyListsByCore[ xOldCore ],
+                                                           &( pxTCB->xStateListItem ) ) != pdFALSE ) )
+                            {
+                                ( void ) uxListRemove( &( pxTCB->xStateListItem ) );
+                                prvAddTaskToReadyList( pxTCB );
+                            }
+
+                            edfTRACE( "[EDF][tick=%lu][partition-migrate] task=%s from=%ld to=%ld\r\n",
+                                      ( unsigned long ) xTaskGetTickCount(),
+                                      pxTCB->pcTaskName,
+                                      ( long ) xOldCore,
+                                      ( long ) xNewCoreID );
+
+                            prvSMPRequestRescheduleForEDF();
+                            xReturn = pdPASS;
+                        }
+                        else
+                        {
+                            if( taskVALID_CORE_ID( xOldCore ) != pdFALSE )
+                            {
+                                ullEDFCoreUtilMicro[ xOldCore ] += ullTaskU;
+                            }
+
+                            xReturn = pdFAIL;
+                        }
+                    }
+                }
+                #else
+                {
+                    pxTCB->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) xNewCoreID );
+
+                    if( ( taskTASK_IS_RUNNING( pxTCB ) != pdFALSE ) &&
+                        ( pxTCB->xTaskRunState != xNewCoreID ) )
+                    {
+                        prvYieldCore( pxTCB->xTaskRunState );
+                    }
+
+                    edfTRACE( "[EDF][tick=%lu][global-affinity] task=%s target_core=%ld\r\n",
+                              ( unsigned long ) xTaskGetTickCount(),
+                              pxTCB->pcTaskName,
+                              ( long ) xNewCoreID );
+
+                    prvSMPRequestRescheduleForEDF();
+                    xReturn = pdPASS;
+                }
+                #endif
+            }
+        }
+        taskEXIT_CRITICAL();
+
+        return xReturn;
+    }
+
+    void vTaskRemoveFromCore( TaskHandle_t xTask )
+    {
+        TCB_t * pxTCB;
+
+        taskENTER_CRITICAL();
+        {
+            pxTCB = prvGetTCBFromHandle( xTask );
+            configASSERT( pxTCB != NULL );
+
+            if( pxTCB->xPeriod > 0U )
+            {
+                #if ( configPARTITIONED_EDF_ENABLE == 1 )
+                {
+                    prvEDFPartitionRemoveTaskUtilization( pxTCB );
+                    pxTCB->xAssignedCore = taskTASK_NOT_RUNNING;
+                }
+                #endif
+
+                pxTCB->uxCoreAffinityMask = 0U;
+
+                if( listLIST_ITEM_CONTAINER( &( pxTCB->xStateListItem ) ) != NULL )
+                {
+                    ( void ) uxListRemove( &( pxTCB->xStateListItem ) );
+                }
+
+                if( taskTASK_IS_RUNNING( pxTCB ) != pdFALSE )
+                {
+                    prvYieldCore( pxTCB->xTaskRunState );
+                }
+
+                edfTRACE( "[EDF][tick=%lu][core-remove] task=%s\r\n",
+                          ( unsigned long ) xTaskGetTickCount(),
+                          pxTCB->pcTaskName );
+            }
+        }
+        taskEXIT_CRITICAL();
+    }
+
+    BaseType_t xTaskCreateEDFOnCore( TaskFunction_t pxTaskCode,
+                                     const char * const pcName,
+                                     const configSTACK_DEPTH_TYPE uxStackDepth,
+                                     void * const pvParameters,
+                                     TickType_t xPeriod,
+                                     TickType_t xRelativeDeadline,
+                                     TickType_t xWcetTicks,
+                                     BaseType_t xCoreID,
+                                     TaskHandle_t * const pxCreatedTask )
+    {
+        TaskHandle_t xCreated = NULL;
+        BaseType_t xReturn;
+
+        if( taskVALID_CORE_ID( xCoreID ) == pdFALSE )
+        {
+            return pdFAIL;
+        }
+
+        xReturn = xTaskCreateEDF( pxTaskCode,
+                                  pcName,
+                                  uxStackDepth,
+                                  pvParameters,
+                                  xPeriod,
+                                  xRelativeDeadline,
+                                  xWcetTicks,
+                                  &xCreated );
+
+        if( ( xReturn == pdPASS ) && ( xCreated != NULL ) )
+        {
+            if( xTaskMigrateToCore( xCreated, xCoreID ) != pdPASS )
+            {
+                vTaskDelete( xCreated );
+                xCreated = NULL;
+                xReturn = pdFAIL;
+            }
+        }
+
+        if( pxCreatedTask != NULL )
+        {
+            *pxCreatedTask = xCreated;
+        }
+
+        return xReturn;
+    }
+#endif /* configUSE_EDF_SCHEDULING && configNUMBER_OF_CORES > 1 */
+/* End FreeRTOS CPSC_538G related - SMP - Task 4 API implementations */
 
 /*-----------------------------------------------------------*/
 
@@ -2781,6 +3503,12 @@ static void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
         pxNewTCB->xJobExecTicks = 0U;
         pxNewTCB->uxEDFFlags = 0U;
 
+        /* Begin FreeRTOS CPSC_538G related - SMP - Default EDF task to unassigned core */
+        #if ( configNUMBER_OF_CORES > 1 )
+            pxNewTCB->xAssignedCore = taskTASK_NOT_RUNNING;
+        #endif
+        /* End FreeRTOS CPSC_538G related - SMP - Default EDF task to unassigned core */
+
         vListInitialiseItem( &( pxNewTCB->xEDFRegistryListItem ) );
         listSET_LIST_ITEM_OWNER( &( pxNewTCB->xEDFRegistryListItem ), pxNewTCB );
     }
@@ -3126,6 +3854,12 @@ static void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
                 if( listLIST_ITEM_CONTAINER( &( pxTCB->xEDFRegistryListItem ) ) != NULL )
                 {
                     ( void ) uxListRemove( &( pxTCB->xEDFRegistryListItem ) );
+
+                    /* Begin FreeRTOS CPSC_538G related - SMP - Partitioned EDF utilization release on delete */
+                    #if ( ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 ) )
+                        prvEDFPartitionRemoveTaskUtilization( pxTCB );
+                    #endif
+                    /* End FreeRTOS CPSC_538G related - SMP - Partitioned EDF utilization release on delete */
 
                     if( uxEDFAcceptedTaskCount > 0U )
                     {
@@ -4701,6 +5435,16 @@ void vTaskStartScheduler( void )
     }
     #endif /* configUSE_TIMERS */
 
+    /* Begin FreeRTOS CPSC_538G related - SMP - Commit pending partitioned tasks before scheduler start */
+    #if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 ) )
+        if( ( xReturn == pdPASS ) &&
+            ( listLIST_IS_EMPTY( &xEDFPendingPartitionList ) == pdFALSE ) )
+        {
+            prvEDFPartitionMovePendingTasksToReadyLists();
+        }
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - Commit pending partitioned tasks before scheduler start */
+
     if( xReturn == pdPASS )
     {
         /* freertos_tasks_c_additions_init() should only be called if the user
@@ -5983,6 +6727,13 @@ BaseType_t xTaskIncrementTick( void )
                 xSwitchRequired = pdTRUE;
             }
         #endif
+
+        /* Begin FreeRTOS CPSC_538G related - SMP - Trigger EDF cross-core preemption checks */
+        #if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) )
+            prvSMPRequestRescheduleForEDF();
+        #endif
+        /* End FreeRTOS CPSC_538G related - SMP - Trigger EDF cross-core preemption checks */
+
         #if ( configUSE_TICK_HOOK == 1 )
         {
             /* Guard against the tick hook being called when the pended tick
@@ -6290,6 +7041,7 @@ BaseType_t xTaskIncrementTick( void )
             //     if( pxCurrentTCB != pxPreviousTCB )
             //     {
             //         edfTRACE( "[EDF][tick=%lu][switch] out=%s out_dl=%lu in=%s in_dl=%lu\r\n",
+
             //                   ( unsigned long ) xTickCount,
             //                   ( pxPreviousTCB != NULL ) ? pxPreviousTCB->pcTaskName : "(null)",
             //                   ( unsigned long ) ( ( pxPreviousTCB != NULL ) ? pxPreviousTCB->xAbsoluteDeadline : 0U ),
@@ -7280,10 +8032,21 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
     pxTCB->xJobExecTicks = 0U;
 
     /* Remove from ready state if needed, then delay until next period. */
-    if( listIS_CONTAINED_WITHIN( &xEDFReadyList, &( pxTCB->xStateListItem ) ) != pdFALSE )
-    {
-        ( void ) uxListRemove( &( pxTCB->xStateListItem ) );
-    }
+    /* Begin FreeRTOS CPSC_538G related - SMP - Handle late-drop ready-list removal for global/partitioned EDF */
+    #if ( ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 ) )
+        if( ( taskVALID_CORE_ID( pxTCB->xAssignedCore ) != pdFALSE ) &&
+            ( listIS_CONTAINED_WITHIN( &xEDFReadyListsByCore[ pxTCB->xAssignedCore ],
+                                       &( pxTCB->xStateListItem ) ) != pdFALSE ) )
+        {
+            ( void ) uxListRemove( &( pxTCB->xStateListItem ) );
+        }
+    #else
+        if( listIS_CONTAINED_WITHIN( &xEDFReadyList, &( pxTCB->xStateListItem ) ) != pdFALSE )
+        {
+            ( void ) uxListRemove( &( pxTCB->xStateListItem ) );
+        }
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - Handle late-drop ready-list removal for global/partitioned EDF */
 
     /* Reinsert through delayed path for next release boundary. */
     prvAddCurrentTaskToDelayedList( pxTCB->xPeriod, pdFALSE );
@@ -7782,6 +8545,18 @@ static void prvInitialiseTaskLists( void )
         * (xListEnd) and clears the item count. Must be done before any
         * EDF tasks are created. */
         vListInitialise( &xEDFReadyList );
+
+        /* Begin FreeRTOS CPSC_538G related - SMP - Partitioned EDF list/state initialization */
+        #if ( ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 ) )
+            for( uxPriority = ( UBaseType_t ) 0U; uxPriority < ( UBaseType_t ) configNUMBER_OF_CORES; uxPriority++ )
+            {
+                vListInitialise( &xEDFReadyListsByCore[ uxPriority ] );
+            }
+
+            vListInitialise( &xEDFPendingPartitionList );
+            ( void ) memset( ullEDFCoreUtilMicro, 0, sizeof( ullEDFCoreUtilMicro ) );
+        #endif
+        /* End FreeRTOS CPSC_538G related - SMP - Partitioned EDF list/state initialization */
         
         /* Initialize the EDF task registry list. This tracks all admitted
         * EDF periodic tasks (ready, blocked, and delayed) for admission control. */

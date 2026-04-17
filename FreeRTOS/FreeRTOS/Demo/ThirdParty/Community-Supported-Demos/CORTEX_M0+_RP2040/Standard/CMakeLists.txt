@@ -128,6 +128,30 @@ function(add_single_test_bin target_name)
         pico_add_extra_outputs(${target_name})
 endfunction()
 
+# Begin FreeRTOS CPSC_538G related - SMP - Task 4 mode-specific test compile definitions
+set(SMP_TASK4_COMMON_DEFS
+        configUSE_EDF_SCHEDULING=1
+        configNUMBER_OF_CORES=2
+        configTICK_CORE=0
+        configRUN_MULTIPLE_PRIORITIES=1
+        configUSE_CORE_AFFINITY=1
+        configUSE_PASSIVE_IDLE_HOOK=0
+        configUSE_SRP=0
+        configUSE_CBS=0
+        configEDF_TRACE_ENABLE=1
+        )
+
+set(SMP_TASK4_GLOBAL_DEFS
+        configGLOBAL_EDF_ENABLE=1
+        configPARTITIONED_EDF_ENABLE=0
+        )
+
+set(SMP_TASK4_PARTITION_DEFS
+        configGLOBAL_EDF_ENABLE=0
+        configPARTITIONED_EDF_ENABLE=1
+        )
+# End FreeRTOS CPSC_538G related - SMP - Task 4 mode-specific test compile definitions
+
 ###############################################################################################
 #                                       EDF
 ###############################################################################################
@@ -167,3 +191,26 @@ add_single_test_bin(main_srp_test_100 mainCREATE_EDF_TEST=1)
 # # CBS workload test. Impossible execution workload. Test overrun management.
 # add_single_test_bin(main_cbs_test_overrun mainCREATE_CBS_TEST=1)
 
+
+###############################################################################################
+#                                       SMP
+###############################################################################################
+add_single_test_bin(main_smp_global_test_admission
+        mainCREATE_EDF_TEST=1
+        ${SMP_TASK4_COMMON_DEFS}
+        ${SMP_TASK4_GLOBAL_DEFS})
+
+add_single_test_bin(main_smp_global_test_migration
+        mainCREATE_EDF_TEST=1
+        ${SMP_TASK4_COMMON_DEFS}
+        ${SMP_TASK4_GLOBAL_DEFS})
+
+add_single_test_bin(main_smp_partition_test_fit
+        mainCREATE_EDF_TEST=1
+        ${SMP_TASK4_COMMON_DEFS}
+        ${SMP_TASK4_PARTITION_DEFS})
+
+add_single_test_bin(main_smp_partition_test_migration
+        mainCREATE_EDF_TEST=1
+        ${SMP_TASK4_COMMON_DEFS}
+        ${SMP_TASK4_PARTITION_DEFS})
