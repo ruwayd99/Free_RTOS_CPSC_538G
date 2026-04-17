@@ -26,25 +26,19 @@
  *      Heap consumed = 100 x (sizeof(TCB) + stack_bytes) ~ 97 KB.
  *
  *  Mode ON   (configSRP_STACK_SHARING = 1):
- *      Creates ONE "representative" task per preemption-level group (5 total),
- *      each using xTaskCreateEDFWithStack() with a dedicated static buffer.
- *      All 5 tasks execute periodically.
- *      Heap consumed = 5 x sizeof(TCB) ~ 1 KB.
- *      Static .bss  = 5 x stack_bytes     ~ 3.8 KB.
+ *      Creates 20 tasks per preemption-level group (100 total), all tasks
+ *      within the same group sharing ONE static stack buffer.
+ *      Each task is created with xTaskCreateEDFWithStack(); only the TCB
+ *      (+ a 20-word private context snapshot) is heap-allocated per task.
+ *      Heap consumed = 100 x (sizeof(TCB) + 20 words) ~ 10 KB.
+ *      Static .bss  = 5 x stack_bytes                 ~ 3.8 KB.
  *
- *  The 5-task Mode ON is enough to *prove* the API and the .bss layout.
- *  By Baker's theorem, those same 5 buffers could host 20 tasks each (100
- *  total) without any additional stack memory, because same-level tasks
- *  never occupy the stack simultaneously.  The report prints that
- *  analytical savings figure alongside the measured heap numbers.
- *
- *  NOTE (implementation honesty):
- *   Running 100 *distinct* FreeRTOS tasks on only 5 physical buffers would
- *   require the kernel to re-initialise a shared buffer on every dispatch
- *   of a new same-level task and to block intra-level preemption.  That
- *   scheduler hook is beyond the scope of the minimal kernel patch shipped
- *   with this assignment, so we present the API + memory comparison using
- *   one task per buffer and extrapolate the savings.
+ *  Runtime stack sharing is enforced by three kernel hooks:
+ *   1. Private snapshot (20 words) saves the initial register frame per task.
+ *   2. Dispatch hook (vTaskSwitchContext) copies snapshot → shared buffer on
+ *      fresh-start dispatch; does nothing for cross-level preemption resume.
+ *   3. Selector guard (prvEDFSelectRunnableTaskBySRP) blocks a fresh-start
+ *      task while any same-level peer has mid-execution context on the buffer.
  * -----------------------------------------------------------------------
  *
  *  Group layout (all T = 8000 ms, WCET = 4 ms):
@@ -72,7 +66,7 @@
 /* GPIO pins, one per group (only 5 used so every mode uses the same pins). */
 static const int piGroupMonitorPins[ SRP100_GROUPS ] =
 {
-    10, 11, 12, 13, 21
+    10, 11, 12, 20, 19
 };
 
 /* ---- Shared stack buffers (only exist when sharing is ON) ------------- */
@@ -241,19 +235,24 @@ static void vMonitorTask( void * pvParameters )
     }
 
     printf( "\r\n" );
-    printf( " --- PROJECTED SAVINGS AT 100 TASKS (20 per group) ---\r\n" );
+    printf( " --- STACK MEMORY COMPARISON (100 tasks, 20 per group) ---\r\n" );
     {
         unsigned long uxNoShareBytes = 100UL * SRP100_STACK_WORDS * 4UL;
-        unsigned long uxShareBytes   = SRP100_GROUPS * SRP100_STACK_WORDS * 4UL;
+        unsigned long uxShareBytes   = ( unsigned long ) SRP100_GROUPS * SRP100_STACK_WORDS * 4UL;
         unsigned long uxSaved        = uxNoShareBytes - uxShareBytes;
         unsigned long uxPct          = ( uxSaved * 100UL ) / uxNoShareBytes;
 
         printf( "   Without sharing : 100 x %d bytes = %lu bytes of stack\r\n",
                 SRP100_STACK_WORDS * 4, uxNoShareBytes );
-        printf( "   With sharing    :   %d x %d bytes = %lu bytes of stack\r\n",
+        printf( "   With sharing    :   %d x %d bytes = %lu bytes of stack (.bss)\r\n",
                 SRP100_GROUPS, SRP100_STACK_WORDS * 4, uxShareBytes );
         printf( "   Stack memory saved by sharing: %lu bytes  (%lu%%)\r\n",
                 uxSaved, uxPct );
+#if ( configSRP_STACK_SHARING == 1 )
+        printf( "   (This run used TRUE runtime sharing: all 100 tasks on 5 buffers)\r\n" );
+#else
+        printf( "   (This run used separate heap stacks for comparison)\r\n" );
+#endif
     }
 
     printf( "=============================================================\r\n\r\n" );
@@ -333,40 +332,44 @@ static void prvBuildTasksModeOff( void )
 #endif /* configSRP_STACK_SHARING == 0 */
 
 #if ( configSRP_STACK_SHARING == 1 )
-/*  Mode ON : one task per group, each task uses its group's static buffer.
- *  By Baker's theorem, additional same-level tasks could reuse the same
- *  buffer without increasing stack memory -- that is the "sharing" the
- *  demo is designed to prove.                                            */
+/*  Mode ON : 20 tasks per group (100 total), all tasks in a group share ONE
+ *  static stack buffer.  The kernel's private-snapshot + dispatch-hook
+ *  mechanism (TODOs 1-6) ensures each task starts fresh on every dispatch
+ *  and same-level tasks never corrupt each other's context.              */
 static void prvBuildTasksModeOn( void )
 {
     int i;
     int uxAccepted = 0;
     int uxRejected = 0;
 
-    printf( "[SRP100] Mode ON  : creating %d tasks (one per preemption-level group),\r\n"
-            "[SRP100]            each using its dedicated SHARED stack buffer\r\n",
-            SRP100_GROUPS );
+    printf( "[SRP100] Mode ON  : creating %d tasks (%d per group x %d groups),\r\n"
+            "[SRP100]            all tasks in a group share ONE static stack buffer\r\n",
+            SRP100_NUM_TASKS_OFF, SRP100_PER_GROUP_OFF, SRP100_GROUPS );
 
-    for( i = 0; i < SRP100_GROUPS; i++ )
+    for( i = 0; i < SRP100_NUM_TASKS_OFF; i++ )
     {
-        int iGroup = i;
-        TickType_t xT = pdMS_TO_TICKS( 8000 );
-        TickType_t xD = pdMS_TO_TICKS( xGroupDeadlineMs[ iGroup ] );
-        TickType_t xC = pdMS_TO_TICKS( 4 );
-        char pcName[ 12 ];
+        int        iGroup = i / SRP100_PER_GROUP_OFF;
+        int        iSlot  = i % SRP100_PER_GROUP_OFF;
+        TickType_t xT     = pdMS_TO_TICKS( 8000 );
+        TickType_t xD     = pdMS_TO_TICKS( xGroupDeadlineMs[ iGroup ] );
+        TickType_t xC     = pdMS_TO_TICKS( 4 );
+        char       pcName[ 12 ];
         BaseType_t xResult;
 
         xTaskParams[ i ].iIndex     = i;
         xTaskParams[ i ].iGroup     = iGroup;
-        xTaskParams[ i ].iPin       = piGroupMonitorPins[ iGroup ];
+        /* Only the first task in each group drives the GPIO monitor pin. */
+        xTaskParams[ i ].iPin       = ( iSlot == 0 ) ? piGroupMonitorPins[ iGroup ] : -1;
         xTaskParams[ i ].xWcetTicks = xC;
         {
             SRPResourceHandle_t xResources[] = { xR1, xR2, xR3, xR4, xR1 };
-            xTaskParams[ i ].xResource = xResources[ iGroup ];
+            /* First 3 tasks per group use the group's shared resource. */
+            xTaskParams[ i ].xResource = ( iSlot < 3 ) ? xResources[ iGroup ] : NULL;
         }
 
-        snprintf( pcName, sizeof( pcName ), "S%c00", 'A' + iGroup );
+        snprintf( pcName, sizeof( pcName ), "S%c%02d", 'A' + iGroup, iSlot );
 
+        /* All tasks in iGroup pass the SAME shared buffer. */
         xResult = xTaskCreateEDFWithStack( vPeriodicWorkerSRP,
                                            pcName,
                                            SRP100_STACK_WORDS,
@@ -383,7 +386,8 @@ static void prvBuildTasksModeOn( void )
         {
             uxRejected++;
             xTaskHandles[ i ] = NULL;
-            printf( "[SRP100][ERROR] group=%d REJECTED\r\n", iGroup );
+            printf( "[SRP100][ERROR] idx=%d group=%d slot=%d REJECTED\r\n",
+                    i, iGroup, iSlot );
         }
     }
 

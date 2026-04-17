@@ -585,6 +585,31 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
     #if ( configUSE_POSIX_ERRNO == 1 )
         int iTaskErrno;
     #endif
+
+    /* FreeRTOS CPSC_538G SRP runtime stack-sharing fields.
+     * These exist only when both EDF scheduling and stack-sharing are enabled.
+    * pxPrivateContextSnapshot : heap buffer holding the task's initial
+    *   register frame so the task can be
+     *   re-dispatched from scratch after a peer has used the shared buffer.
+     * pxSnapshotTopOfStack     : the value of pxTopOfStack at task creation
+     *   time (= top-of-buffer minus initial frame offset).  Used to restore
+     *   pxTopOfStack on a fresh-start dispatch.
+    * uxPrivateContextWords    : number of words stored in
+    *   pxPrivateContextSnapshot. Computed from the initialized stack layout.
+     * pxSharedStackBuffer      : base address of the group's shared .bss buffer.
+     * uxSharedStackDepth       : size of the shared buffer in words.
+     * xSharedStackFreshStart   : pdTRUE  -> next dispatch copies snapshot to
+     *   the shared buffer and resets pxTopOfStack (fresh job start).
+     *   pdFALSE -> mid-execution context is already on the buffer; no copy
+     *   needed (cross-level preemption resume). */
+    #if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configSRP_STACK_SHARING == 1 ) )
+        StackType_t *          pxPrivateContextSnapshot;
+        StackType_t *          pxSnapshotTopOfStack;
+        configSTACK_DEPTH_TYPE uxPrivateContextWords;
+        StackType_t *          pxSharedStackBuffer;
+        configSTACK_DEPTH_TYPE uxSharedStackDepth;
+        BaseType_t             xSharedStackFreshStart;
+    #endif
 } tskTCB;
 
 /* The old tskTCB name is maintained above then typedefed to the new TCB_t name
@@ -2497,6 +2522,54 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
             prvInitialiseNewTask( pxTaskCode, pcName, uxStackDepth, pvParameters,
                                   uxPriority, pxCreatedTask, pxNewTCB, NULL );
+
+            /* TODO 2: Allocate a private context snapshot for this task.
+             * After prvInitialiseNewTask, pxTopOfStack points to the bottom of
+             * the initial register frame on the shared buffer.  Copy those words
+             * into a small per-task heap buffer so the task can be re-dispatched
+             * from scratch even after a peer has used the shared buffer. */
+            #if ( configSRP_STACK_SHARING == 1 )
+            {
+                StackType_t * pxSnapshotTop;
+                StackType_t * pxSnap;
+                size_t uxSnapshotWords;
+
+                pxSnapshotTop = ( StackType_t * ) pxNewTCB->pxTopOfStack;
+
+                configASSERT( pxSnapshotTop >= puxStackBuffer );
+                configASSERT( pxSnapshotTop <= ( puxStackBuffer + uxStackDepth ) );
+
+                uxSnapshotWords = ( size_t ) ( ( puxStackBuffer + uxStackDepth ) - pxSnapshotTop );
+
+                if( uxSnapshotWords == 0U )
+                {
+                    vPortFree( pxNewTCB );
+                    return NULL;
+                }
+
+                pxSnap = ( StackType_t * ) pvPortMalloc( uxSnapshotWords * sizeof( StackType_t ) );
+
+                if( pxSnap != NULL )
+                {
+                    ( void ) memcpy( ( void * ) pxSnap,
+                                     ( const void * ) pxSnapshotTop,
+                                     uxSnapshotWords * sizeof( StackType_t ) );
+                    pxNewTCB->pxPrivateContextSnapshot = pxSnap;
+                    pxNewTCB->pxSnapshotTopOfStack     = pxSnapshotTop;
+                    pxNewTCB->uxPrivateContextWords    = ( configSTACK_DEPTH_TYPE ) uxSnapshotWords;
+                    pxNewTCB->pxSharedStackBuffer      = puxStackBuffer;
+                    pxNewTCB->uxSharedStackDepth       = uxStackDepth;
+                    pxNewTCB->xSharedStackFreshStart   = pdTRUE;
+                }
+                else
+                {
+                    /* Snapshot allocation failed – release TCB and signal
+                     * failure to the caller. */
+                    vPortFree( pxNewTCB );
+                    pxNewTCB = NULL;
+                }
+            }
+            #endif /* configSRP_STACK_SHARING */
         }
 
         return pxNewTCB;
@@ -3196,6 +3269,19 @@ void vTaskDelayUntilNextPeriod( TickType_t * pxPreviousWakeTime )
     pxTCB->xLastReleaseTick += pxTCB->xPeriod;
     pxTCB->xAbsoluteDeadline = pxTCB->xLastReleaseTick + pxTCB->xRelativeDeadline;
     pxTCB->xJobExecTicks = 0U;
+
+    /* TODO 5: Mark fresh-start BEFORE blocking so that, if a same-level peer
+     * uses the shared buffer while this task sleeps, the dispatch hook will
+     * restore this task's initial register frame instead of the stale
+     * mid-execution frame that was saved when it last blocked. */
+    #if ( configSRP_STACK_SHARING == 1 )
+    {
+        if( pxTCB->pxPrivateContextSnapshot != NULL )
+        {
+            pxTCB->xSharedStackFreshStart = pdTRUE;
+        }
+    }
+    #endif /* configSRP_STACK_SHARING */
 
     /* Delay until next release to preserve periodic behavior. */
     vTaskDelayUntil( pxPreviousWakeTime, pxTCB->xPeriod );
@@ -6176,6 +6262,29 @@ BaseType_t xTaskIncrementTick( void )
             // pxPreviousTCB = pxCurrentTCB;
             taskSELECT_HIGHEST_PRIORITY_TASK();
 
+            /* TODO 3 dispatch hook: if the incoming task is a shared-stack
+             * task that needs a fresh start, copy its private context snapshot
+             * to the top of the shared buffer and reset pxTopOfStack so that
+             * PendSV restores the initial register frame.
+             *
+             * If xSharedStackFreshStart == pdFALSE the task was mid-execution
+             * when it was preempted (cross-level preemption scenario): its
+             * context is already on the shared buffer at the correct offset,
+             * and pxTopOfStack already points there.  No action needed. */
+            #if ( ( configUSE_EDF_SCHEDULING == 1 ) && ( configSRP_STACK_SHARING == 1 ) )
+            {
+                if( ( pxCurrentTCB->pxPrivateContextSnapshot != NULL ) &&
+                    ( pxCurrentTCB->xSharedStackFreshStart   == pdTRUE ) )
+                {
+                    ( void ) memcpy( ( void * ) pxCurrentTCB->pxSnapshotTopOfStack,
+                                     ( const void * ) pxCurrentTCB->pxPrivateContextSnapshot,
+                                     ( ( size_t ) pxCurrentTCB->uxPrivateContextWords ) * sizeof( StackType_t ) );
+                    pxCurrentTCB->pxTopOfStack         = pxCurrentTCB->pxSnapshotTopOfStack;
+                    pxCurrentTCB->xSharedStackFreshStart = pdFALSE;
+                }
+            }
+            #endif /* configUSE_EDF_SCHEDULING && configSRP_STACK_SHARING */
+
             // #if ( configUSE_EDF_SCHEDULING == 1 )
             // {
             //     if( pxCurrentTCB != pxPreviousTCB )
@@ -7202,6 +7311,48 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         return ( pxTCB->uxPreemptionLevel > uxSystemCeiling ) ? pdTRUE : pdFALSE;
     }
 
+    /* TODO 4 helper: scan the EDF ready list (and pxCurrentTCB) for any task
+     * that shares the given buffer + preemption level and has mid-execution
+     * context on it (xSharedStackFreshStart == pdFALSE means it ran at least
+     * once and its live context is on the buffer).
+     * Called only when configSRP_STACK_SHARING == 1. */
+    #if ( configSRP_STACK_SHARING == 1 )
+    static BaseType_t prvSharedBufferHasMidExecutionTask( const StackType_t * pxBuffer,
+                                                          UBaseType_t uxLevel )
+    {
+        const List_t * const pxReadyList = &xEDFReadyList;
+        const ListItem_t * pxEndMarker   = listGET_END_MARKER( pxReadyList );
+        const ListItem_t * pxIterator;
+
+        for( pxIterator = listGET_HEAD_ENTRY( pxReadyList );
+             pxIterator != pxEndMarker;
+             pxIterator = listGET_NEXT( pxIterator ) )
+        {
+            const TCB_t * pxOther = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIterator );
+
+            if( ( pxOther->pxSharedStackBuffer == pxBuffer ) &&
+                ( pxOther->uxPreemptionLevel   == uxLevel  ) &&
+                ( pxOther->xSharedStackFreshStart == pdFALSE ) )
+            {
+                return pdTRUE;
+            }
+        }
+
+        /* Also check pxCurrentTCB: it is being switched away right now and
+         * its context has just been saved to the shared buffer by PendSV,
+         * but it may still be in the ready list or may have been removed. */
+        if( ( pxCurrentTCB != NULL ) &&
+            ( pxCurrentTCB->pxSharedStackBuffer == pxBuffer ) &&
+            ( pxCurrentTCB->uxPreemptionLevel   == uxLevel  ) &&
+            ( pxCurrentTCB->xSharedStackFreshStart == pdFALSE ) )
+        {
+            return pdTRUE;
+        }
+
+        return pdFALSE;
+    }
+    #endif /* configSRP_STACK_SHARING */
+
     static TCB_t * prvEDFSelectRunnableTaskBySRP( void )
     {
         const List_t * const pxReadyList = &xEDFReadyList;
@@ -7214,6 +7365,27 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
 
             if( prvSRPCanTaskRun( pxCandidate ) != pdFALSE )
             {
+                /* TODO 4 guard: block a fresh-start shared-stack task when
+                 * a same-level peer has mid-execution context on the buffer.
+                 * Baker's theorem guarantees same-level tasks never overlap,
+                 * but we must not overwrite a peer's live context with the
+                 * new task's initial frame until the peer is done and has
+                 * called vTaskDelayUntilNextPeriod (setting its own flag to
+                 * pdTRUE).  Cross-level preemption is unaffected: a higher-
+                 * level task uses a different buffer. */
+                #if ( configSRP_STACK_SHARING == 1 )
+                if( ( pxCandidate->pxSharedStackBuffer != NULL ) &&
+                    ( pxCandidate->xSharedStackFreshStart == pdTRUE ) &&
+                    ( prvSharedBufferHasMidExecutionTask(
+                          pxCandidate->pxSharedStackBuffer,
+                          pxCandidate->uxPreemptionLevel ) != pdFALSE ) )
+                {
+                    srpTRACE( "[SRP][BLOCK-SHARED] task=%s waiting for mid-exec peer on same buffer\r\n",
+                              pxCandidate->pcTaskName );
+                    continue;
+                }
+                #endif /* configSRP_STACK_SHARING */
+
                 return pxCandidate;
             }
 
