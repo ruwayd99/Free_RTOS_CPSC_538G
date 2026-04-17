@@ -11,16 +11,15 @@
 #define NUM_PERIODIC_TASKS 3
 
 #define PERIODIC_PERIOD_MS   1000
-#define PERIODIC_WCET_MS     150
+#define PERIODIC_WCET_MS     250
 
 #define CBS_PERIOD_MS       1000
-#define CBS_BUDGET_MS       150
+#define CBS_BUDGET_MS       400
 
-#define APPROX_CBS_TRIGGER_PERIOD_MS  700
-#define CBS_WCET_MS                   90
+#define APPROX_CBS_TRIGGER_PERIOD_MS  500
+#define CBS_WCET_MS                   300
 
 static TaskHandle_t xCBSTaskHandle = NULL;
-static TaskHandle_t xCBSTriggerHandle = NULL;
 static TaskHandle_t xPeriodicTaskHandles[ NUM_PERIODIC_TASKS ] = { NULL };
 
 static volatile uint32_t ulPeriodicRunCount[ NUM_PERIODIC_TASKS ] = { 0U };
@@ -28,6 +27,8 @@ static volatile uint32_t ulCBSRunCount = 0U;
 static volatile TickType_t xLastCBSTriggerTick = 0U;
 static volatile TickType_t xLastCBSStartTick = 0U;
 static volatile TickType_t xLastCBSEndTick = 0U;
+
+static volatile bool bIsCBSFinished = true;
 
 static void prvBusyWait(TickType_t xTicks)
 {
@@ -50,6 +51,26 @@ static void vPeriodicTask(void *pvParameters)
 
     for (;;)
     {
+        BaseType_t xShouldNotifyCBS = pdFALSE;
+        TickType_t xNow = xTaskGetTickCount();
+
+        taskENTER_CRITICAL();
+        {
+            if( ( xCBSTaskHandle != NULL ) &&
+                ( bIsCBSFinished != false ) &&
+                ( ( xNow - xLastCBSTriggerTick ) >= pdMS_TO_TICKS( APPROX_CBS_TRIGGER_PERIOD_MS ) ) )
+            {
+                xLastCBSTriggerTick = xNow;
+                xShouldNotifyCBS = pdTRUE;
+            }
+        }
+        taskEXIT_CRITICAL();
+
+        if( xShouldNotifyCBS != pdFALSE )
+        {
+            xTaskNotifyGive( xCBSTaskHandle );
+        }
+
         gpio_put(pin, 1);
         ulPeriodicRunCount[ idx ]++;
         prvBusyWait(pdMS_TO_TICKS(PERIODIC_WCET_MS));
@@ -70,6 +91,7 @@ static void vCBSAperiodicTask(void *pvParameters)
     for (;;)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        bIsCBSFinished = false;
 
         xLastCBSStartTick = xTaskGetTickCount();
 
@@ -87,21 +109,8 @@ static void vCBSAperiodicTask(void *pvParameters)
                (unsigned long)xLastCBSStartTick,
                (unsigned long)xLastCBSEndTick,
                (unsigned long)xLastCBSTriggerTick);
-    }
-}
-
-static void vCBSTriggerTask(void *pvParameters)
-{
-    (void)pvParameters;
-    for (;;)
-    {
-        /* Trigger period is approximate; EDF load can shift actual release time. */
-        vTaskDelay(pdMS_TO_TICKS(APPROX_CBS_TRIGGER_PERIOD_MS));
-        if (xCBSTaskHandle)
-        {
-            xLastCBSTriggerTick = xTaskGetTickCount();
-            xTaskNotifyGive(xCBSTaskHandle);
-        }
+        
+        bIsCBSFinished = true;
     }
 }
 
@@ -142,14 +151,6 @@ void main_cbs_test(void)
                                  pdMS_TO_TICKS(CBS_BUDGET_MS),
                                  pdMS_TO_TICKS(CBS_PERIOD_MS),
                                  &xCBSTaskHandle) == pdPASS );
-
-    // CBS trigger task
-    configASSERT( xTaskCreate(vCBSTriggerTask,
-                              "CBS_TRIGGER",
-                              1024,
-                              NULL,
-                              tskIDLE_PRIORITY + 1,
-                              &xCBSTriggerHandle) == pdPASS );
 
     vTaskStartScheduler();
     for (;;)
