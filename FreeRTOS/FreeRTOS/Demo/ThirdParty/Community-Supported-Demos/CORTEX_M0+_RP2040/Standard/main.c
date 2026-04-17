@@ -76,6 +76,16 @@ When mainCREATE_EDF_TEST is 1, it overrides the blinky/full choice. */
 #define mainCREATE_CBS_TEST 0
 #endif
 
+/* Begin FreeRTOS CPSC_538G related - SMP - test routing flags */
+#ifndef mainCREATE_MP_GLOBAL_TEST
+#define mainCREATE_MP_GLOBAL_TEST 0
+#endif
+
+#ifndef mainCREATE_MP_PARTITIONED_TEST
+#define mainCREATE_MP_PARTITIONED_TEST 0
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - test routing flags */
+
 /*-----------------------------------------------------------*/
 
 /*
@@ -88,7 +98,12 @@ static void prvSetupHardware( void );
  * main_full() is used when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 0.
  * main_edf_test() is used when mainCREATE_EDF_TEST is set to 1.
  */
-#if mainCREATE_EDF_TEST == 1
+/* Begin FreeRTOS CPSC_538G related - SMP - extern declarations */
+#if mainCREATE_MP_GLOBAL_TEST == 1
+extern void main_mp_global_test( void );
+#elif mainCREATE_MP_PARTITIONED_TEST == 1
+extern void main_mp_partitioned_test( void );
+#elif mainCREATE_EDF_TEST == 1
 extern void main_edf_test( void );
 #elif mainCREATE_CBS_TEST == 1
 extern void main_cbs_test( void );
@@ -97,6 +112,7 @@ extern void main_blinky( void );
 #else
 extern void main_full( void );
 #endif
+/* End FreeRTOS CPSC_538G related - SMP - extern declarations */
 
 /* Prototypes for the standard FreeRTOS callback/hook functions implemented
 within this file. */
@@ -109,7 +125,12 @@ void vApplicationTickHook( void );
 
 void vLaunch( void)
 {
-#if mainCREATE_EDF_TEST == 1
+/* Begin FreeRTOS CPSC_538G related - SMP - launch dispatch */
+#if mainCREATE_MP_GLOBAL_TEST == 1
+    main_mp_global_test();
+#elif mainCREATE_MP_PARTITIONED_TEST == 1
+    main_mp_partitioned_test();
+#elif mainCREATE_EDF_TEST == 1
     main_edf_test();
 #elif mainCREATE_CBS_TEST == 1
     main_cbs_test();
@@ -118,6 +139,7 @@ void vLaunch( void)
 #else
     main_full();
 #endif
+/* End FreeRTOS CPSC_538G related - SMP - launch dispatch */
 }
 
 int main( void )
@@ -205,7 +227,7 @@ void vApplicationIdleHook( void )
 
 void vApplicationTickHook( void )
 {
-#if ( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 0 ) && ( mainCREATE_EDF_TEST == 0 ) && ( mainCREATE_CBS_TEST == 0 )
+#if ( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 0 ) && ( mainCREATE_EDF_TEST == 0 ) && ( mainCREATE_CBS_TEST == 0 ) && ( mainCREATE_MP_GLOBAL_TEST == 0 ) && ( mainCREATE_MP_PARTITIONED_TEST == 0 )
     {
         /* The full demo includes a software timer demo/test that requires
         prodding periodically from the tick interrupt. */

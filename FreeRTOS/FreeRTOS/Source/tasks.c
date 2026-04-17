@@ -197,9 +197,10 @@
 /*-----------------------------------------------------------*/
 /* FreeRTOS CPSC_538G related task selection*/
 #if ( configUSE_EDF_SCHEDULING == 1 )
-    #if ( configUSE_SRP == 1 )
-        static struct tskTaskControlBlock * prvEDFSelectRunnableTaskBySRP( void );
-        #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
+    #if ( configNUMBER_OF_CORES == 1 )
+        #if ( configUSE_SRP == 1 )
+            static struct tskTaskControlBlock * prvEDFSelectRunnableTaskBySRP( void );
+            #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
     do {                                                                              \
         pxCurrentTCB = prvEDFSelectRunnableTaskBySRP();                               \
                                                                                     \
@@ -217,8 +218,8 @@
             uxTopReadyPriority = uxTopPriority;                                       \
         }                                                                             \
     } while( 0 )
-    #else
-        #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
+        #else
+            #define taskSELECT_HIGHEST_PRIORITY_TASK()                                    \
     do {                                                                              \
         if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )                         \
         {                                                                             \
@@ -238,7 +239,25 @@
             uxTopReadyPriority = uxTopPriority;                                       \
         }                                                                             \
     } while( 0 )
-    #endif
+        #endif
+    #else /* configNUMBER_OF_CORES == 1 */
+    /* Begin FreeRTOS CPSC_538G related - SMP - EDF-aware SMP task selection */
+    /*
+     * On SMP with EDF we take over the per-core dispatch function.  The core
+     * walks the deadline-sorted xEDFReadyList head-to-tail, skipping tasks
+     * whose core-affinity forbids this core or that are already running on
+     * the other core, and selects the earliest-deadline remaining task.  On
+     * an empty EDF ready list we fall through to the stock priority-based
+     * selector so idle / non-EDF tasks still get a turn.
+     *
+     * Same function body serves both global and partitioned modes — the
+     * only difference between the two is how uxCoreAffinityMask was set
+     * at admission time.
+     */
+    static void prvEDFSelectHighestPriorityTask_SMP( BaseType_t xCoreID );
+    #define taskSELECT_HIGHEST_PRIORITY_TASK( xCoreID )    prvEDFSelectHighestPriorityTask_SMP( xCoreID )
+    /* End FreeRTOS CPSC_538G related - SMP - EDF-aware SMP task selection */
+    #endif /* configNUMBER_OF_CORES == 1 */
 #else
 /* Original macro (unchanged). */
     #if ( configNUMBER_OF_CORES == 1 ) /* Standard FreeRTOS task selection */
@@ -474,6 +493,18 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
         ListItem_t xEDFRegistryListItem;/* Dedicated list item for EDF registry membership. */
     #endif
 
+    /* Begin FreeRTOS CPSC_538G related - SMP - TCB core binding */
+    #if ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 )
+        /* Partitioned: the core this task is pinned to (0..N-1).
+         * Global:      tskNO_AFFINITY (a job may run on any allowed core). */
+        BaseType_t xAssignedCore;
+        /* Utilization (scaled to micro-units: 1e6 == 100%).  Cached at
+         * admission so partitioned migration/remove can reverse the
+         * accounting without re-computing C/T. */
+        uint32_t   ulEDFUtilMicro;
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - TCB core binding */
+
     /* FreeRTOS CPSC_538G related fields*/
     #if ( configUSE_SRP == 1 )
         /* The task's preemption level. Higher = more powerful (can preempt
@@ -666,6 +697,14 @@ PRIVILEGED_DATA static List_t xPendingReadyList;                         /**< Ta
     PRIVILEGED_DATA static UBaseType_t uxEDFRejectedTaskCount = 0U;
 #endif
 
+/* Begin FreeRTOS CPSC_538G related - SMP - per-core utilization tracking */
+#if ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 )
+    /* Running sum of U_i (in micro-units, 1e6 == 100%) per core.  Maintained
+     * only under partitioned mode; zeroed but unused under global mode. */
+    PRIVILEGED_DATA static uint32_t ulCoreUtilMicro[ configNUMBER_OF_CORES ] = { 0 };
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - per-core utilization tracking */
+
 #if ( configUSE_SRP == 1 )
     typedef struct xSRPUserRegistration
     {
@@ -845,6 +884,24 @@ static void prvInitialiseTaskLists( void ) PRIVILEGED_FUNCTION;
     static BaseType_t prvEDFAdmissionConstrained( const EDFAdmissionTaskParams_t * pxCandidate,
                                                   const char ** ppcReason );
     static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow );
+
+    /* Begin FreeRTOS CPSC_538G related - SMP - admission + dispatch prototypes */
+    #if ( configNUMBER_OF_CORES > 1 )
+        /* Goossens-Funk-Baruah sufficient test for global EDF on m cores:
+         *     sum(U_i) <= m - (m - 1) * max(U_i)
+         * (sufficient, not necessary — pessimistic for Dhall-like sets). */
+        static BaseType_t prvEDFAdmissionGlobal( const EDFAdmissionTaskParams_t * pxCandidate,
+                                                 const char ** ppcReason );
+
+        /* Partitioned first-fit: assign candidate to the first core whose
+         * running U_i + candidate U <= 1.  Caller is responsible for sorting
+         * pending tasks by decreasing U to get First-Fit-Decreasing. */
+        static BaseType_t prvEDFAdmissionPartitionedFirstFit( const EDFAdmissionTaskParams_t * pxCandidate,
+                                                              BaseType_t * pxOutAssignedCore,
+                                                              uint32_t * pulOutUtilMicro,
+                                                              const char ** ppcReason );
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - admission + dispatch prototypes */
 
     #if ( configUSE_SRP == 1 )
         static UBaseType_t prvSRPCalculateTaskPreemptionLevel( TickType_t xRelativeDeadline );
@@ -1760,6 +1817,12 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
     BaseType_t xYieldRequired = pdFALSE;
     const char * pcReason = "UNKNOWN";
     EDFAdmissionTaskParams_t xCandidate;
+    /* Begin FreeRTOS CPSC_538G related - SMP - partitioning locals */
+    #if ( configNUMBER_OF_CORES > 1 )
+        BaseType_t xAssignedCoreLocal = tskNO_AFFINITY;
+        uint32_t   ulAssignedUtilMicro = 0U;
+    #endif
+    /* End FreeRTOS CPSC_538G related - SMP - partitioning locals */
 
     /* Basic parameter validation first so kernel rejects bad API usage early. */
     if( ( xPeriod == 0U ) || ( xRelativeDeadline == 0U ) || ( xWcetTicks == 0U ) )
@@ -1791,6 +1854,8 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
     /* Admission and insertion must be atomic while scheduler is running. */
     taskENTER_CRITICAL();
     {
+        BaseType_t xAdmissionResult;
+
         /* First EDF task can be created before the regular creation path has
          * had a chance to initialize kernel lists. Admission traverses EDF
          * registry lists, so ensure list initialization has happened first. */
@@ -1799,9 +1864,27 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
             prvInitialiseTaskLists();
         }
 
+        /* Begin FreeRTOS CPSC_538G related - SMP - admission dispatch per mode */
+        #if ( configNUMBER_OF_CORES > 1 )
+            #if ( configPARTITIONED_EDF_ENABLE == 1 )
+                /* First-Fit: pack candidate into the first core with room.  In
+                 * batch mode (pre-start) callers are expected to submit tasks
+                 * in decreasing-U order to achieve First-Fit-Decreasing. */
+                xAdmissionResult = prvEDFAdmissionPartitionedFirstFit( &xCandidate,
+                                                                       &xAssignedCoreLocal,
+                                                                       &ulAssignedUtilMicro,
+                                                                       &pcReason );
+            #else
+                xAdmissionResult = prvEDFAdmissionGlobal( &xCandidate, &pcReason );
+            #endif
+        #else
+            xAdmissionResult = prvEDFAdmissionControl( &xCandidate, &pcReason );
+        #endif
+        /* End FreeRTOS CPSC_538G related - SMP - admission dispatch per mode */
+
         /* This works both pre-start and runtime, so requirement "accept new tasks
          * while system is running" is satisfied by the same API path. */
-        if( prvEDFAdmissionControl( &xCandidate, &pcReason ) == pdPASS )
+        if( xAdmissionResult == pdPASS )
         {
             /* Allocate and initialize the task after admission says OK. */
             pxNewTCB = prvCreateTask( pxTaskCode,
@@ -1826,6 +1909,34 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                 #if ( configUSE_SRP == 1 )
                     pxNewTCB->uxPreemptionLevel = xCandidate.uxLevel;
                 #endif
+
+                /* Begin FreeRTOS CPSC_538G related - SMP - seed core binding */
+                #if ( configNUMBER_OF_CORES > 1 )
+                {
+                    pxNewTCB->xAssignedCore  = xAssignedCoreLocal;
+                    pxNewTCB->ulEDFUtilMicro = ulAssignedUtilMicro;
+                    #if ( configPARTITIONED_EDF_ENABLE == 1 )
+                        pxNewTCB->uxCoreAffinityMask = ( UBaseType_t ) ( 1U << xAssignedCoreLocal );
+                        /* Commit the reserved utilization now that the TCB exists. */
+                        ulCoreUtilMicro[ xAssignedCoreLocal ] += ulAssignedUtilMicro;
+                        edfTRACE( "[EDF][SMP][partitioned][bind] task=%s U=%lu.%06lu -> core=%ld coreU=%lu.%06lu\r\n",
+                                  pcName,
+                                  ( unsigned long ) ( ulAssignedUtilMicro / 1000000UL ),
+                                  ( unsigned long ) ( ulAssignedUtilMicro % 1000000UL ),
+                                  ( long ) xAssignedCoreLocal,
+                                  ( unsigned long ) ( ulCoreUtilMicro[ xAssignedCoreLocal ] / 1000000UL ),
+                                  ( unsigned long ) ( ulCoreUtilMicro[ xAssignedCoreLocal ] % 1000000UL ) );
+                    #else
+                        pxNewTCB->uxCoreAffinityMask = ( UBaseType_t ) ( ( 1U << configNUMBER_OF_CORES ) - 1U );
+                        edfTRACE( "[EDF][SMP][global][admit] task=%s U=%lu.%06lu affinity=0x%lx\r\n",
+                                  pcName,
+                                  ( unsigned long ) ( ulAssignedUtilMicro / 1000000UL ),
+                                  ( unsigned long ) ( ulAssignedUtilMicro % 1000000UL ),
+                                  ( unsigned long ) pxNewTCB->uxCoreAffinityMask );
+                    #endif
+                }
+                #endif
+                /* End FreeRTOS CPSC_538G related - SMP - seed core binding */
 
                 /* Add task to scheduler and internal EDF registry. */
                 prvAddNewTaskToReadyList( pxNewTCB );
@@ -2014,6 +2125,492 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
         return xReturn;
     }
 #endif /* configUSE_EDF_SCHEDULING - xTaskCreateEDFWithStack */
+
+/* Begin FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF implementation */
+#if ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 )
+
+/*
+ * Compute candidate utilization in micro-units (1e6 == 100%).
+ * Using integer math so we stay clear of softfloat in the ISR path.
+ */
+static uint32_t prvEDFUtilMicro( TickType_t xC, TickType_t xT )
+{
+    const uint32_t ulScale = 1000000UL;
+    if( xT == 0U )
+    {
+        return ulScale; /* treat zero period as 100% to force rejection */
+    }
+    return ( uint32_t ) ( ( ( uint64_t ) xC * ulScale ) / xT );
+}
+
+/*
+ * Goossens-Funk-Baruah (GFB) sufficient feasibility test for global EDF on m
+ * identical processors, implicit deadlines:
+ *
+ *     sum(U_i) <= m - (m - 1) * max(U_i)
+ *
+ * - Necessary precondition (Dhall-aware pruning): every U_i <= 1.
+ * - GFB is sufficient, not necessary; task sets with one high-U task get
+ *   aggressively rejected.  That matches the assignment's ask for admission
+ *   control rather than peak schedulable load.
+ * - See multi_proc_implementation.md for rationale.
+ */
+static BaseType_t prvEDFAdmissionGlobal( const EDFAdmissionTaskParams_t * pxCandidate,
+                                         const char ** ppcReason )
+{
+    const uint32_t ulScale = 1000000UL;
+    uint64_t ullSumU = 0ULL;
+    uint64_t ullMaxU = 0ULL;
+    uint64_t ullUcand;
+    const ListItem_t * pxIt;
+    const ListItem_t * pxEnd;
+
+    ullUcand = ( uint64_t ) prvEDFUtilMicro( pxCandidate->xC, pxCandidate->xT );
+    if( ullUcand > ( uint64_t ) ulScale )
+    {
+        *ppcReason = "global: U_i > 1";
+        return pdFAIL;
+    }
+    ullSumU = ullUcand;
+    ullMaxU = ullUcand;
+
+    pxEnd = listGET_END_MARKER( &xEDFTaskRegistryList );
+    for( pxIt = listGET_HEAD_ENTRY( &xEDFTaskRegistryList );
+         pxIt != pxEnd;
+         pxIt = listGET_NEXT( pxIt ) )
+    {
+        const TCB_t * pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+        uint64_t ullU = ( uint64_t ) prvEDFUtilMicro( pxTCB->xWcetTicks, pxTCB->xPeriod );
+        ullSumU += ullU;
+        if( ullU > ullMaxU )
+        {
+            ullMaxU = ullU;
+        }
+    }
+
+    /* GFB bound = m * scale - (m - 1) * maxU. */
+    {
+        uint64_t ullBound = ( uint64_t ) configNUMBER_OF_CORES * ( uint64_t ) ulScale;
+        ullBound -= ( uint64_t ) ( configNUMBER_OF_CORES - 1 ) * ullMaxU;
+
+        if( ullSumU <= ullBound )
+        {
+            *ppcReason = "global: GFB pass";
+            edfTRACE( "[EDF][SMP][global][GFB] sumU=%lu.%06lu maxU=%lu.%06lu bound=%lu.%06lu -> PASS\r\n",
+                      ( unsigned long ) ( ullSumU / ulScale ),
+                      ( unsigned long ) ( ullSumU % ulScale ),
+                      ( unsigned long ) ( ullMaxU / ulScale ),
+                      ( unsigned long ) ( ullMaxU % ulScale ),
+                      ( unsigned long ) ( ullBound / ulScale ),
+                      ( unsigned long ) ( ullBound % ulScale ) );
+            return pdPASS;
+        }
+
+        edfTRACE( "[EDF][SMP][global][GFB] sumU=%lu.%06lu maxU=%lu.%06lu bound=%lu.%06lu -> REJECT\r\n",
+                  ( unsigned long ) ( ullSumU / ulScale ),
+                  ( unsigned long ) ( ullSumU % ulScale ),
+                  ( unsigned long ) ( ullMaxU / ulScale ),
+                  ( unsigned long ) ( ullMaxU % ulScale ),
+                  ( unsigned long ) ( ullBound / ulScale ),
+                  ( unsigned long ) ( ullBound % ulScale ) );
+        *ppcReason = "global: GFB fail";
+        return pdFAIL;
+    }
+}
+
+/*
+ * Partitioned admission using First-Fit over the live per-core utilization
+ * vector ulCoreUtilMicro[].  The returned xOutAssignedCore is NOT committed
+ * into the global accounting array until the caller has actually allocated
+ * the TCB — xTaskCreateEDF commits after prvCreateTask succeeds.
+ *
+ * Decreasing-first-fit behaviour is achieved by callers submitting tasks in
+ * decreasing-U order.  This is the exact algorithm from lecture 15.
+ */
+static BaseType_t prvEDFAdmissionPartitionedFirstFit( const EDFAdmissionTaskParams_t * pxCandidate,
+                                                      BaseType_t * pxOutAssignedCore,
+                                                      uint32_t * pulOutUtilMicro,
+                                                      const char ** ppcReason )
+{
+    const uint32_t ulScale = 1000000UL;
+    uint32_t ulU = prvEDFUtilMicro( pxCandidate->xC, pxCandidate->xT );
+    BaseType_t xCore;
+
+    *pulOutUtilMicro = ulU;
+    *pxOutAssignedCore = tskNO_AFFINITY;
+
+    if( ulU > ulScale )
+    {
+        *ppcReason = "partitioned: U_i > 1";
+        return pdFAIL;
+    }
+
+    /* First-Fit: take the lowest-index core that still has room.
+     * This is the core-binding decision called out in the assignment;
+     * the trace below makes it visible in the serial log. */
+    for( xCore = 0; xCore < ( BaseType_t ) configNUMBER_OF_CORES; xCore++ )
+    {
+        uint64_t ullAfter = ( uint64_t ) ulCoreUtilMicro[ xCore ] + ( uint64_t ) ulU;
+
+        edfTRACE( "[EDF][SMP][partitioned][FF][try] task=%s U=%lu.%06lu core=%ld coreU=%lu.%06lu after=%lu.%06lu %s\r\n",
+                  pxCandidate->pcName,
+                  ( unsigned long ) ( ulU / ulScale ),
+                  ( unsigned long ) ( ulU % ulScale ),
+                  ( long ) xCore,
+                  ( unsigned long ) ( ulCoreUtilMicro[ xCore ] / ulScale ),
+                  ( unsigned long ) ( ulCoreUtilMicro[ xCore ] % ulScale ),
+                  ( unsigned long ) ( ullAfter / ulScale ),
+                  ( unsigned long ) ( ullAfter % ulScale ),
+                  ( ullAfter <= ( uint64_t ) ulScale ) ? "FIT" : "SKIP" );
+
+        if( ullAfter <= ( uint64_t ) ulScale )
+        {
+            *pxOutAssignedCore = xCore;
+            *ppcReason = "partitioned: FF pass";
+            return pdPASS;
+        }
+    }
+
+    *ppcReason = "partitioned: no core has room";
+    return pdFAIL;
+}
+
+/*
+ * SMP task selection: walk deadline-sorted xEDFReadyList and pick the
+ * earliest-deadline task whose affinity includes this core AND is not
+ * currently running on another core.  Falls back to the stock SMP selector
+ * when no EDF job is ready (idle / non-EDF tasks).
+ *
+ * This function is on the per-tick / context-switch fast path.  No trace
+ * prints here — that would flood the serial port.
+ */
+static void prvEDFSelectHighestPriorityTask_SMP( BaseType_t xCoreID )
+{
+    const ListItem_t * pxIt;
+    const ListItem_t * pxEnd;
+
+    configASSERT( xSchedulerRunning == pdTRUE );
+
+    pxEnd = listGET_END_MARKER( &xEDFReadyList );
+    for( pxIt = listGET_HEAD_ENTRY( &xEDFReadyList );
+         pxIt != pxEnd;
+         pxIt = listGET_NEXT( pxIt ) )
+    {
+        TCB_t * pxTCB = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+
+        /* Affinity: partitioned uses a 1-bit mask; global allows all cores. */
+        if( ( pxTCB->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) == 0U )
+        {
+            continue;
+        }
+
+        /* If the task is running on a different core, skip it (can't pick
+         * the same job twice in global EDF). Running-on-this-core is fine;
+         * it means we pick ourselves and keep going. */
+        if( ( pxTCB->xTaskRunState != taskTASK_NOT_RUNNING ) &&
+            ( pxTCB->xTaskRunState != xCoreID ) &&
+            ( pxTCB->xTaskRunState != taskTASK_SCHEDULED_TO_YIELD ) )
+        {
+            continue;
+        }
+
+        /* Found a candidate. Detach the previously running task on this core
+         * (if it was us) and bind pxTCB. */
+        if( pxCurrentTCBs[ xCoreID ] != pxTCB )
+        {
+            if( pxCurrentTCBs[ xCoreID ] != NULL )
+            {
+                if( pxCurrentTCBs[ xCoreID ]->xTaskRunState == xCoreID )
+                {
+                    pxCurrentTCBs[ xCoreID ]->xTaskRunState = taskTASK_NOT_RUNNING;
+                }
+            }
+            pxCurrentTCBs[ xCoreID ] = pxTCB;
+        }
+        pxTCB->xTaskRunState = xCoreID;
+        return;
+    }
+
+    /* No EDF job available; defer to stock priority-based selection so the
+     * idle task (and any non-EDF tasks) gets a turn. */
+    prvSelectHighestPriorityTask( xCoreID );
+}
+
+/*-----------------------------------------------------------*/
+
+BaseType_t xTaskCreateEDFOnCore( TaskFunction_t pxTaskCode,
+                                 const char * const pcName,
+                                 const configSTACK_DEPTH_TYPE uxStackDepth,
+                                 void * const pvParameters,
+                                 TickType_t xPeriod,
+                                 TickType_t xRelativeDeadline,
+                                 TickType_t xWcetTicks,
+                                 BaseType_t xCoreID,
+                                 TaskHandle_t * const pxCreatedTask )
+{
+    BaseType_t xReturn;
+
+    /* Delegate to the standard creator, then override the core binding
+     * once the task exists.  For partitioned mode the FFD admission might
+     * have chosen a different core; we respect the user's explicit choice
+     * but still want the utilization accounting to reflect it. */
+    if( ( xCoreID < 0 ) || ( xCoreID >= ( BaseType_t ) configNUMBER_OF_CORES ) )
+    {
+        if( xCoreID != tskNO_AFFINITY )
+        {
+            edfTRACE( "[EDF][SMP][OnCore] task=%s invalid core=%ld -> REJECT\r\n",
+                      pcName, ( long ) xCoreID );
+            return pdFAIL;
+        }
+    }
+
+    #if ( configPARTITIONED_EDF_ENABLE == 1 )
+    {
+        /* Under partitioned mode, check the requested core has room BEFORE
+         * we let FFD pick somewhere else.  Reject early if it doesn't fit. */
+        if( xCoreID != tskNO_AFFINITY )
+        {
+            const uint32_t ulScale = 1000000UL;
+            uint32_t ulU = prvEDFUtilMicro( xWcetTicks, xPeriod );
+            uint64_t ullAfter;
+
+            taskENTER_CRITICAL();
+            ullAfter = ( uint64_t ) ulCoreUtilMicro[ xCoreID ] + ( uint64_t ) ulU;
+            taskEXIT_CRITICAL();
+
+            if( ullAfter > ( uint64_t ) ulScale )
+            {
+                edfTRACE( "[EDF][SMP][OnCore][partitioned][bind] task=%s requested core=%ld NO ROOM (would be %lu.%06lu) -> REJECT\r\n",
+                          pcName,
+                          ( long ) xCoreID,
+                          ( unsigned long ) ( ullAfter / ulScale ),
+                          ( unsigned long ) ( ullAfter % ulScale ) );
+                return pdFAIL;
+            }
+            edfTRACE( "[EDF][SMP][OnCore][partitioned][bind] task=%s pinned core=%ld (U=%lu.%06lu will fit)\r\n",
+                      pcName,
+                      ( long ) xCoreID,
+                      ( unsigned long ) ( ulU / ulScale ),
+                      ( unsigned long ) ( ulU % ulScale ) );
+        }
+    }
+    #endif
+
+    xReturn = xTaskCreateEDF( pxTaskCode, pcName, uxStackDepth, pvParameters,
+                              xPeriod, xRelativeDeadline, xWcetTicks,
+                              pxCreatedTask );
+    if( xReturn != pdPASS )
+    {
+        return xReturn;
+    }
+
+    if( ( xCoreID != tskNO_AFFINITY ) && ( pxCreatedTask != NULL ) && ( *pxCreatedTask != NULL ) )
+    {
+        TCB_t * pxTCB = ( TCB_t * ) *pxCreatedTask;
+
+        taskENTER_CRITICAL();
+        {
+            #if ( configPARTITIONED_EDF_ENABLE == 1 )
+            {
+                /* Move the accounting from FFD's chosen core to the user's
+                 * chosen core if they differ. */
+                if( pxTCB->xAssignedCore != xCoreID )
+                {
+                    if( ( pxTCB->xAssignedCore >= 0 ) &&
+                        ( pxTCB->xAssignedCore < ( BaseType_t ) configNUMBER_OF_CORES ) )
+                    {
+                        ulCoreUtilMicro[ pxTCB->xAssignedCore ] -= pxTCB->ulEDFUtilMicro;
+                    }
+                    ulCoreUtilMicro[ xCoreID ] += pxTCB->ulEDFUtilMicro;
+                    edfTRACE( "[EDF][SMP][OnCore][partitioned][rebind] task=%s %ld -> %ld\r\n",
+                              pcName,
+                              ( long ) pxTCB->xAssignedCore,
+                              ( long ) xCoreID );
+                    pxTCB->xAssignedCore = xCoreID;
+                }
+            }
+            #else
+            {
+                pxTCB->xAssignedCore = xCoreID;
+                edfTRACE( "[EDF][SMP][OnCore][global][hint] task=%s affinity-hint core=%ld\r\n",
+                          pcName, ( long ) xCoreID );
+            }
+            #endif
+
+            pxTCB->uxCoreAffinityMask = ( UBaseType_t ) ( 1U << xCoreID );
+        }
+        taskEXIT_CRITICAL();
+    }
+
+    return xReturn;
+}
+
+/*-----------------------------------------------------------*/
+
+void vTaskRemoveFromCore( TaskHandle_t xTask )
+{
+    TCB_t * pxTCB = ( xTask == NULL ) ? ( TCB_t * ) xTaskGetCurrentTaskHandle() : ( TCB_t * ) xTask;
+
+    if( pxTCB == NULL )
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    {
+        #if ( configPARTITIONED_EDF_ENABLE == 1 )
+        {
+            if( ( pxTCB->xAssignedCore >= 0 ) &&
+                ( pxTCB->xAssignedCore < ( BaseType_t ) configNUMBER_OF_CORES ) )
+            {
+                if( ulCoreUtilMicro[ pxTCB->xAssignedCore ] >= pxTCB->ulEDFUtilMicro )
+                {
+                    ulCoreUtilMicro[ pxTCB->xAssignedCore ] -= pxTCB->ulEDFUtilMicro;
+                }
+                else
+                {
+                    ulCoreUtilMicro[ pxTCB->xAssignedCore ] = 0U;
+                }
+                edfTRACE( "[EDF][SMP][partitioned][remove] task=%s core=%ld freed=%lu.%06lu coreU=%lu.%06lu\r\n",
+                          pxTCB->pcTaskName,
+                          ( long ) pxTCB->xAssignedCore,
+                          ( unsigned long ) ( pxTCB->ulEDFUtilMicro / 1000000UL ),
+                          ( unsigned long ) ( pxTCB->ulEDFUtilMicro % 1000000UL ),
+                          ( unsigned long ) ( ulCoreUtilMicro[ pxTCB->xAssignedCore ] / 1000000UL ),
+                          ( unsigned long ) ( ulCoreUtilMicro[ pxTCB->xAssignedCore ] % 1000000UL ) );
+            }
+        }
+        #else
+        {
+            edfTRACE( "[EDF][SMP][global][remove] task=%s (clearing affinity hint)\r\n",
+                      pxTCB->pcTaskName );
+            pxTCB->uxCoreAffinityMask = ( UBaseType_t ) ( ( 1U << configNUMBER_OF_CORES ) - 1U );
+        }
+        #endif
+
+        pxTCB->xAssignedCore = tskNO_AFFINITY;
+    }
+    taskEXIT_CRITICAL();
+
+    /* Partitioned semantics: removing from a core means the task no longer
+     * runs.  Delete it.  Global: affinity mask reset above is sufficient. */
+    #if ( configPARTITIONED_EDF_ENABLE == 1 )
+    {
+        vTaskDelete( ( TaskHandle_t ) pxTCB );
+    }
+    #endif
+}
+
+/*-----------------------------------------------------------*/
+
+BaseType_t xTaskMigrateToCore( TaskHandle_t xTask, BaseType_t xNewCoreID )
+{
+    TCB_t * pxTCB = ( xTask == NULL ) ? ( TCB_t * ) xTaskGetCurrentTaskHandle() : ( TCB_t * ) xTask;
+    BaseType_t xReturn = pdFAIL;
+
+    if( pxTCB == NULL )
+    {
+        return pdFAIL;
+    }
+    if( ( xNewCoreID < 0 ) || ( xNewCoreID >= ( BaseType_t ) configNUMBER_OF_CORES ) )
+    {
+        return pdFAIL;
+    }
+
+    taskENTER_CRITICAL();
+    {
+        #if ( configPARTITIONED_EDF_ENABLE == 1 )
+        {
+            const uint32_t ulScale = 1000000UL;
+            uint64_t ullAfter;
+            uint32_t ulCurCoreU;
+
+            ulCurCoreU = ( pxTCB->xAssignedCore >= 0 ) ? ulCoreUtilMicro[ pxTCB->xAssignedCore ] : 0U;
+            ( void ) ulCurCoreU;
+
+            ullAfter = ( uint64_t ) ulCoreUtilMicro[ xNewCoreID ] + ( uint64_t ) pxTCB->ulEDFUtilMicro;
+
+            if( pxTCB->xAssignedCore == xNewCoreID )
+            {
+                edfTRACE( "[EDF][SMP][partitioned][migrate] task=%s already on core=%ld\r\n",
+                          pxTCB->pcTaskName, ( long ) xNewCoreID );
+                xReturn = pdPASS;
+            }
+            else if( ullAfter > ( uint64_t ) ulScale )
+            {
+                edfTRACE( "[EDF][SMP][partitioned][migrate] task=%s %ld -> %ld REJECT (target busy: %lu.%06lu)\r\n",
+                          pxTCB->pcTaskName,
+                          ( long ) pxTCB->xAssignedCore,
+                          ( long ) xNewCoreID,
+                          ( unsigned long ) ( ullAfter / ulScale ),
+                          ( unsigned long ) ( ullAfter % ulScale ) );
+                xReturn = pdFAIL;
+            }
+            else
+            {
+                if( ( pxTCB->xAssignedCore >= 0 ) &&
+                    ( pxTCB->xAssignedCore < ( BaseType_t ) configNUMBER_OF_CORES ) )
+                {
+                    if( ulCoreUtilMicro[ pxTCB->xAssignedCore ] >= pxTCB->ulEDFUtilMicro )
+                    {
+                        ulCoreUtilMicro[ pxTCB->xAssignedCore ] -= pxTCB->ulEDFUtilMicro;
+                    }
+                }
+                ulCoreUtilMicro[ xNewCoreID ] += pxTCB->ulEDFUtilMicro;
+
+                edfTRACE( "[EDF][SMP][partitioned][migrate] task=%s %ld -> %ld OK newCoreU=%lu.%06lu\r\n",
+                          pxTCB->pcTaskName,
+                          ( long ) pxTCB->xAssignedCore,
+                          ( long ) xNewCoreID,
+                          ( unsigned long ) ( ulCoreUtilMicro[ xNewCoreID ] / ulScale ),
+                          ( unsigned long ) ( ulCoreUtilMicro[ xNewCoreID ] % ulScale ) );
+
+                pxTCB->xAssignedCore      = xNewCoreID;
+                pxTCB->uxCoreAffinityMask = ( UBaseType_t ) ( 1U << xNewCoreID );
+                xReturn = pdPASS;
+            }
+        }
+        #else
+        {
+            /* Global: dispatch is still global; we only change the hint. */
+            pxTCB->xAssignedCore      = xNewCoreID;
+            pxTCB->uxCoreAffinityMask = ( UBaseType_t ) ( 1U << xNewCoreID );
+            edfTRACE( "[EDF][SMP][global][migrate] task=%s affinity-hint -> %ld\r\n",
+                      pxTCB->pcTaskName, ( long ) xNewCoreID );
+            xReturn = pdPASS;
+        }
+        #endif
+    }
+    taskEXIT_CRITICAL();
+
+    return xReturn;
+}
+
+/*-----------------------------------------------------------*/
+
+BaseType_t xTaskGetAssignedCore( TaskHandle_t xTask )
+{
+    TCB_t * pxTCB = ( xTask == NULL ) ? ( TCB_t * ) xTaskGetCurrentTaskHandle() : ( TCB_t * ) xTask;
+    if( pxTCB == NULL )
+    {
+        return tskNO_AFFINITY;
+    }
+    return pxTCB->xAssignedCore;
+}
+
+/*-----------------------------------------------------------*/
+
+uint32_t ulTaskGetCoreUtilMicro( BaseType_t xCoreID )
+{
+    if( ( xCoreID < 0 ) || ( xCoreID >= ( BaseType_t ) configNUMBER_OF_CORES ) )
+    {
+        return 0U;
+    }
+    return ulCoreUtilMicro[ xCoreID ];
+}
+
+#endif /* ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) */
+/* End FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF implementation */
 
 /*-----------------------------------------------------------*/
 
@@ -3131,6 +3728,25 @@ static void prvInitialiseNewTask( TaskFunction_t pxTaskCode,
                     {
                         uxEDFAcceptedTaskCount--;
                     }
+
+                    /* Begin FreeRTOS CPSC_538G related - SMP - free core util on delete */
+                    #if ( configNUMBER_OF_CORES > 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 )
+                    {
+                        if( ( pxTCB->xAssignedCore >= 0 ) &&
+                            ( pxTCB->xAssignedCore < ( BaseType_t ) configNUMBER_OF_CORES ) )
+                        {
+                            if( ulCoreUtilMicro[ pxTCB->xAssignedCore ] >= pxTCB->ulEDFUtilMicro )
+                            {
+                                ulCoreUtilMicro[ pxTCB->xAssignedCore ] -= pxTCB->ulEDFUtilMicro;
+                            }
+                            else
+                            {
+                                ulCoreUtilMicro[ pxTCB->xAssignedCore ] = 0U;
+                            }
+                        }
+                    }
+                    #endif
+                    /* End FreeRTOS CPSC_538G related - SMP - free core util on delete */
                 }
             }
             #endif
@@ -5975,7 +6591,7 @@ BaseType_t xTaskIncrementTick( void )
             #endif /* #if ( ( configUSE_PREEMPTION == 1 ) && ( configUSE_TIME_SLICING == 1 ) ) */
         #endif /* #if ( configUSE_EDF_SCHEDULING == 0 ) */
         /* FreeRTOS CPSC_538G related: Check for deadline miss and drop late job */
-        #if ( configUSE_EDF_SCHEDULING == 1 )
+        #if ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES == 1 )
             if( ( pxCurrentTCB->xPeriod > 0U ) && ( xConstTickCount > pxCurrentTCB->xAbsoluteDeadline ) )
             {
                 /* Deadline passed while job still active -> immediate drop policy. */
@@ -5983,6 +6599,67 @@ BaseType_t xTaskIncrementTick( void )
                 xSwitchRequired = pdTRUE;
             }
         #endif
+        /* Begin FreeRTOS CPSC_538G related - SMP - per-core deadline-miss + cross-core preempt */
+        #if ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 )
+        {
+            BaseType_t xMpCore;
+
+            /* Per-core deadline-miss check (each core has its own current job). */
+            for( xMpCore = 0; xMpCore < ( BaseType_t ) configNUMBER_OF_CORES; xMpCore++ )
+            {
+                TCB_t * pxMpCurrent = pxCurrentTCBs[ xMpCore ];
+                if( ( pxMpCurrent != NULL ) &&
+                    ( pxMpCurrent->xPeriod > 0U ) &&
+                    ( xConstTickCount > pxMpCurrent->xAbsoluteDeadline ) )
+                {
+                    prvEDFDropLateJob( pxMpCurrent, xConstTickCount );
+                    if( xMpCore == ( BaseType_t ) portGET_CORE_ID() )
+                    {
+                        xSwitchRequired = pdTRUE;
+                    }
+                    else
+                    {
+                        prvYieldCore( xMpCore );
+                    }
+                }
+            }
+
+            /* Cross-core preempt: if the head of xEDFReadyList has an earlier
+             * absolute deadline than either core's current job (and affinity
+             * allows), poke that core.  prvYieldForTask already handles the
+             * priority-list case on release; this covers the EDF ordering the
+             * priority heuristic cannot see. */
+            if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )
+            {
+                TCB_t * pxHead = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFReadyList );
+
+                for( xMpCore = 0; xMpCore < ( BaseType_t ) configNUMBER_OF_CORES; xMpCore++ )
+                {
+                    TCB_t * pxMpCurrent = pxCurrentTCBs[ xMpCore ];
+                    if( ( pxMpCurrent != NULL ) &&
+                        ( pxMpCurrent != pxHead ) &&
+                        ( ( pxHead->uxCoreAffinityMask & ( 1U << xMpCore ) ) != 0U ) )
+                    {
+                        /* Idle or non-EDF current (xPeriod == 0), OR an EDF task
+                         * whose deadline is later than the pending head: preempt. */
+                        if( ( pxMpCurrent->xPeriod == 0U ) ||
+                            ( pxHead->xAbsoluteDeadline < pxMpCurrent->xAbsoluteDeadline ) )
+                        {
+                            if( xMpCore == ( BaseType_t ) portGET_CORE_ID() )
+                            {
+                                xSwitchRequired = pdTRUE;
+                            }
+                            else
+                            {
+                                prvYieldCore( xMpCore );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #endif
+        /* End FreeRTOS CPSC_538G related - SMP - per-core deadline-miss + cross-core preempt */
         #if ( configUSE_TICK_HOOK == 1 )
         {
             /* Guard against the tick hook being called when the pended tick

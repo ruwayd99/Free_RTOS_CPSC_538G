@@ -167,3 +167,30 @@ add_single_test_bin(main_srp_test_100 mainCREATE_EDF_TEST=1)
 # # CBS workload test. Impossible execution workload. Test overrun management.
 # add_single_test_bin(main_cbs_test_overrun mainCREATE_CBS_TEST=1)
 
+###############################################################################################
+#                                       MP (SMP) EDF
+###############################################################################################
+# Begin FreeRTOS CPSC_538G related - SMP - MP EDF test targets
+# Global EDF (GFB admission) test
+add_single_test_bin(main_mp_global_test
+        mainCREATE_MP_GLOBAL_TEST=1
+        configUSE_MP_EDF=1
+        configGLOBAL_EDF_ENABLE=1
+        configPARTITIONED_EDF_ENABLE=0
+        configUSE_SRP=0
+        configUSE_CBS=0
+        )
+target_link_libraries(main_mp_global_test pico_multicore)
+
+# Partitioned EDF (First-Fit-Decreasing admission) test
+add_single_test_bin(main_mp_partitioned_test
+        mainCREATE_MP_PARTITIONED_TEST=1
+        configUSE_MP_EDF=1
+        configGLOBAL_EDF_ENABLE=0
+        configPARTITIONED_EDF_ENABLE=1
+        configUSE_SRP=0
+        configUSE_CBS=0
+        )
+target_link_libraries(main_mp_partitioned_test pico_multicore)
+# End FreeRTOS CPSC_538G related - SMP - MP EDF test targets
+

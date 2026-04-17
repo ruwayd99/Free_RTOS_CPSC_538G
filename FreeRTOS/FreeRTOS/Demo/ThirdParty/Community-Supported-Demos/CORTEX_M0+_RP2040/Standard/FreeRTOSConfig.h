@@ -122,9 +122,54 @@
 */
 
 /* SMP port only */
-#define configNUMBER_OF_CORES                   1
-#define configTICK_CORE                         0
-#define configRUN_MULTIPLE_PRIORITIES           0
+/* Begin FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF configuration */
+/*
+ * Task 4 (Multiprocessor EDF) configuration.
+ *
+ * To enable dual-core scheduling, set configUSE_MP_EDF to 1 and pick exactly
+ * one of configGLOBAL_EDF_ENABLE / configPARTITIONED_EDF_ENABLE.  Leaving
+ * configUSE_MP_EDF at 0 keeps the existing single-core EDF/SRP/CBS behaviour
+ * for the non-MP demo binaries so they continue to build unchanged.
+ *
+ * The MP test binaries define configUSE_MP_EDF and the desired mode through
+ * their CMake target_compile_definitions — see CMakeLists.txt.
+ */
+#ifndef configUSE_MP_EDF
+    #define configUSE_MP_EDF                    0
+#endif
+
+#if ( configUSE_MP_EDF == 1 )
+    #define configNUMBER_OF_CORES               2
+    #define configTICK_CORE                     0
+    /* MANDATORY for EDF on SMP: every EDF job carries its own absolute-deadline
+     * priority.  With configRUN_MULTIPLE_PRIORITIES == 0 the peer core refuses to
+     * run a lower-priority task while another core runs a higher-priority one —
+     * which, under our EDF overlay, starves the second-earliest-deadline task. */
+    #define configRUN_MULTIPLE_PRIORITIES       1
+    #define configUSE_CORE_AFFINITY             1
+
+    /* Pick exactly one mode.  Default to global when neither is forced. */
+    #ifndef configGLOBAL_EDF_ENABLE
+        #define configGLOBAL_EDF_ENABLE         1
+    #endif
+    #ifndef configPARTITIONED_EDF_ENABLE
+        #define configPARTITIONED_EDF_ENABLE    0
+    #endif
+    #if ( configGLOBAL_EDF_ENABLE == 1 ) && ( configPARTITIONED_EDF_ENABLE == 1 )
+        #error "Task 4: choose exactly one of configGLOBAL_EDF_ENABLE or configPARTITIONED_EDF_ENABLE"
+    #endif
+    #if ( configGLOBAL_EDF_ENABLE == 0 ) && ( configPARTITIONED_EDF_ENABLE == 0 )
+        #undef  configGLOBAL_EDF_ENABLE
+        #define configGLOBAL_EDF_ENABLE         1
+    #endif
+#else
+    #define configNUMBER_OF_CORES               1
+    #define configTICK_CORE                     0
+    #define configRUN_MULTIPLE_PRIORITIES       0
+    #define configGLOBAL_EDF_ENABLE             0
+    #define configPARTITIONED_EDF_ENABLE        0
+#endif
+/* End FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF configuration */
 
 /* RP2040 specific */
 #define configSUPPORT_PICO_SYNC_INTEROP         1

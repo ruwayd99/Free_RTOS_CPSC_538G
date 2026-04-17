@@ -346,6 +346,62 @@ typedef enum
     );
 #endif
 
+/* Begin FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF API */
+#if ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 )
+
+    /* Create an EDF periodic task, hard-bound to core xCoreID.
+     *
+     * Partitioned mode (configPARTITIONED_EDF_ENABLE == 1):
+     *   - admission checks the candidate's utilization against that core's
+     *     spare capacity.  If the core cannot absorb U_i the call fails —
+     *     callers that want automatic bin-packing should use xTaskCreateEDF,
+     *     which runs First-Fit-Decreasing instead of naming a core.
+     *
+     * Global mode (configGLOBAL_EDF_ENABLE == 1):
+     *   - xCoreID becomes an affinity hint only; admission still uses the
+     *     Goossens-Funk-Baruah (GFB) test over the full task set.  The
+     *     dispatcher may still migrate the task at a job boundary.
+     *
+     * Passing xCoreID = tskNO_AFFINITY drops core pinning in global mode. */
+    BaseType_t xTaskCreateEDFOnCore(
+        TaskFunction_t pxTaskCode,
+        const char * const pcName,
+        const configSTACK_DEPTH_TYPE uxStackDepth,
+        void * const pvParameters,
+        TickType_t xPeriod,
+        TickType_t xRelativeDeadline,
+        TickType_t xWcetTicks,
+        BaseType_t xCoreID,
+        TaskHandle_t * const pxCreatedTask
+    );
+
+    /* Remove a task from its assigned core.
+     *
+     * Partitioned: deletes the task and releases its utilization share from
+     * that core's accounting so a future admission can reuse the capacity.
+     * Global: clears core affinity and leaves the task in the global pool. */
+    void vTaskRemoveFromCore( TaskHandle_t xTask );
+
+    /* Migrate a task to a different core.
+     *
+     * Partitioned: tries to re-partition — moves the task's utilization from
+     * its current bin into xNewCoreID's bin. Returns pdFAIL if the target
+     * core cannot absorb the utilization (no admission, no-op).
+     * Global: updates the affinity mask; dispatch still happens globally. */
+    BaseType_t xTaskMigrateToCore( TaskHandle_t xTask, BaseType_t xNewCoreID );
+
+    /* Introspection for tests / traces. Returns the core a task is currently
+     * assigned to (partitioned) or tskNO_AFFINITY (global). */
+    BaseType_t xTaskGetAssignedCore( TaskHandle_t xTask );
+
+    /* Returns current per-core utilization (in micro-units; 1e6 = 100%)
+     * tracked by the partitioned admission controller. Intended for demo
+     * output only — undefined outside partitioned mode. */
+    uint32_t ulTaskGetCoreUtilMicro( BaseType_t xCoreID );
+
+#endif /* ( configUSE_EDF_SCHEDULING == 1 ) && ( configNUMBER_OF_CORES > 1 ) */
+/* End FreeRTOS CPSC_538G related - SMP - Multiprocessor EDF API */
+
 #if ( configUSE_SRP == 1 )
     SRPResourceHandle_t xSRPResourceCreate( UBaseType_t uxMaxUnits );
 
