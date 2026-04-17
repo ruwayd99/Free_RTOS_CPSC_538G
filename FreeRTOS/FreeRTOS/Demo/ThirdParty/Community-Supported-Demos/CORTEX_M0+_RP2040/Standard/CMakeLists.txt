@@ -103,189 +103,67 @@ target_include_directories(main_blinky PRIVATE
 target_link_libraries(main_blinky pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap1)
 pico_add_extra_outputs(main_blinky)
 
-# EDF test target (from Assignment Guide Section 5)
-add_executable(main_edf_test
-        main.c
-        main_edf_test.c
-        )
+function(add_single_test_bin target_name)
+        add_executable(${target_name}
+                main.c
+                ${target_name}.c
+                )
 
-target_compile_definitions(main_edf_test PRIVATE
-        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
-        )
+        target_compile_definitions(${target_name} PRIVATE
+                mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
+                ${ARGN}
+                )
 
-target_include_directories(main_edf_test PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${FREERTOS_DEMO_PATH}/Common/include)
+        target_include_directories(${target_name} PRIVATE
+                ${CMAKE_CURRENT_LIST_DIR}
+                ${FREERTOS_DEMO_PATH}/Common/include)
 
-target_compile_options(main_edf_test PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
-        )
+        target_compile_options(${target_name} PRIVATE
+                $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
+                $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
+                $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
+                )
 
-target_link_libraries(main_edf_test pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-pico_add_extra_outputs(main_edf_test)
+        target_link_libraries(${target_name} pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
+        pico_add_extra_outputs(${target_name})
+endfunction()
 
+###############################################################################################
+#                                       EDF
+###############################################################################################
+# # EDF test target (from Assignment Guide Section 5)
+# add_single_test_bin(main_edf_test mainCREATE_EDF_TEST=1)
 
-# add_executable(main_cbs_test
-#         main.c
-#         main_cbs_test.c
-#         )
+# # Previous EDF test variant target
+# add_single_test_bin(main_edf_test_previous mainCREATE_EDF_TEST=1)
 
-# target_compile_definitions(main_cbs_test PRIVATE
-#         mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-#         mainCREATE_CBS_TEST=1
-#         )
+# # EDF dynamic admission control test (8 tasks: 6 startup + 2 runtime + reject + accept)
+# add_single_test_bin(main_edf_test_dynamic mainCREATE_EDF_TEST=1)
 
-# target_include_directories(main_cbs_test PRIVATE
-#         ${CMAKE_CURRENT_LIST_DIR}
-#         ${FREERTOS_DEMO_PATH}/Common/include)
+# # EDF 100-task admission control test (professor README requirement)
+# add_single_test_bin(main_edf_test_100 mainCREATE_EDF_TEST=1)
 
-# target_compile_options(main_cbs_test PRIVATE
-#         $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
-#         $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
-#         $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
-#         )
+###############################################################################################
+#                                       SRP
+###############################################################################################
+# # SRP basic test (existing test from Assignment 2)
+# add_single_test_bin(main_srp_test mainCREATE_EDF_TEST=1)
 
-# target_link_libraries(main_cbs_test pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-# pico_add_extra_outputs(main_cbs_test)
+# # SRP dynamic test (3 multi-unit resources, nested access, runtime admit/reject)
+# add_single_test_bin(main_srp_test_dynamic mainCREATE_EDF_TEST=1)
 
-# Previous EDF test variant target
-add_executable(main_edf_test_previous
-        main.c
-        main_edf_test_previous.c
-        )
+# # SRP 100-task stack-sharing quantitative test (professor README requirement)
+# add_single_test_bin(main_srp_test_100 mainCREATE_EDF_TEST=1)
 
-target_compile_definitions(main_edf_test_previous PRIVATE
-        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
-        )
+###############################################################################################
+#                                       CBS
+###############################################################################################
+# CBS basic (high utilization)
+add_single_test_bin(main_cbs_test mainCREATE_CBS_TEST=1)
 
-target_include_directories(main_edf_test_previous PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${FREERTOS_DEMO_PATH}/Common/include)
+# CBS workload test. Multiple tasks, dynamic task dispatch
+add_single_test_bin(main_cbs_test_dynamic_multi mainCREATE_CBS_TEST=1)
 
-target_link_libraries(main_edf_test_previous pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-pico_add_extra_outputs(main_edf_test_previous)
-
-# EDF dynamic admission control test (8 tasks: 6 startup + 2 runtime + reject + accept)
-add_executable(main_edf_test_dynamic
-        main.c
-        main_edf_test_dynamic.c
-        )
-
-target_compile_definitions(main_edf_test_dynamic PRIVATE
-        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
-        )
-
-target_include_directories(main_edf_test_dynamic PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${FREERTOS_DEMO_PATH}/Common/include)
-
-target_compile_options(main_edf_test_dynamic PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
-        )
-
-target_link_libraries(main_edf_test_dynamic pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-pico_add_extra_outputs(main_edf_test_dynamic)
-
-# EDF 100-task admission control test (professor README requirement)
-add_executable(main_edf_test_100
-        main.c
-        main_edf_test_100.c
-        )
-
-target_compile_definitions(main_edf_test_100 PRIVATE
-        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
-        )
-
-target_include_directories(main_edf_test_100 PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${FREERTOS_DEMO_PATH}/Common/include)
-
-target_compile_options(main_edf_test_100 PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
-        )
-
-target_link_libraries(main_edf_test_100 pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-pico_add_extra_outputs(main_edf_test_100)
-
-# SRP basic test (existing test from Assignment 2)
-add_executable(main_srp_test
-        main.c
-        main_srp_test.c
-        )
-
-target_compile_definitions(main_srp_test PRIVATE
-        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
-        )
-
-target_include_directories(main_srp_test PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${FREERTOS_DEMO_PATH}/Common/include)
-
-target_compile_options(main_srp_test PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
-        )
-
-target_link_libraries(main_srp_test pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-pico_add_extra_outputs(main_srp_test)
-
-# SRP dynamic test (3 multi-unit resources, nested access, runtime admit/reject)
-add_executable(main_srp_test_dynamic
-        main.c
-        main_srp_test_dynamic.c
-        )
-
-target_compile_definitions(main_srp_test_dynamic PRIVATE
-        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
-        )
-
-target_include_directories(main_srp_test_dynamic PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${FREERTOS_DEMO_PATH}/Common/include)
-
-target_compile_options(main_srp_test_dynamic PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
-        )
-
-target_link_libraries(main_srp_test_dynamic pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-pico_add_extra_outputs(main_srp_test_dynamic)
-
-# SRP 100-task stack-sharing quantitative test (professor README requirement)
-add_executable(main_srp_test_100
-        main.c
-        main_srp_test_100.c
-        )
-
-target_compile_definitions(main_srp_test_100 PRIVATE
-        mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-        mainCREATE_EDF_TEST=1
-        )
-
-target_include_directories(main_srp_test_100 PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${FREERTOS_DEMO_PATH}/Common/include)
-
-target_compile_options(main_srp_test_100 PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-Og>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-g3>
-        $<$<COMPILE_LANG_AND_ID:C,GNU>:-fno-inline>
-        )
-
-target_link_libraries(main_srp_test_100 pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-pico_add_extra_outputs(main_srp_test_100)
+# CBS workload test. Impossible execution workload. Test overrun management.
+add_single_test_bin(main_cbs_test_overrun mainCREATE_CBS_TEST=1)
 
