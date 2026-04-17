@@ -99,11 +99,15 @@
 #define configPRINTF( x )           printf x
 
 /* Begin FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
+#ifndef configUSE_CBS
 #define configUSE_CBS    0    /* Enable Constant Bandwidth Server */
+#endif
 /* End FreeRTOS CPSC_538G related - CBS - Enable CBS in config */
 
 /* FreeRTOS CPSC_538G related configs*/
+#ifndef configUSE_SRP
 #define configUSE_SRP    1    /* Enable Stack Resource Policy */
+#endif
 #define configMAX_SRP_RESOURCES 8
 #define configMAX_SRP_USERS_PER_RESOURCE 16
 #define configEDF_MAX_ANALYSIS_TICKS 100000U
@@ -147,6 +151,8 @@
      * which, under our EDF overlay, starves the second-earliest-deadline task. */
     #define configRUN_MULTIPLE_PRIORITIES       1
     #define configUSE_CORE_AFFINITY             1
+    /* SMP port requires a passive idle hook definition (0 = not used). */
+    #define configUSE_PASSIVE_IDLE_HOOK         0
 
     /* Pick exactly one mode.  Default to global when neither is forced. */
     #ifndef configGLOBAL_EDF_ENABLE
