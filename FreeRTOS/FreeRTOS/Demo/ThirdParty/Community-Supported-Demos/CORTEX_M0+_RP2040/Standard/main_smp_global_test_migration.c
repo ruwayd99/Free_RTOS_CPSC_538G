@@ -15,8 +15,8 @@ typedef struct
 static TaskHandle_t xHintedTaskHandle = NULL;
 static TaskHandle_t xPeerTaskHandle = NULL;
 
-static SMPGlobalMigrationParams_t xHintedParams = { "G_HINT", 14, pdMS_TO_TICKS( 90 ) };
-static SMPGlobalMigrationParams_t xPeerParams = { "G_PEER", 15, pdMS_TO_TICKS( 100 ) };
+static SMPGlobalMigrationParams_t xHintedParams = { "G_HINT", 20, pdMS_TO_TICKS( 90 ) };
+static SMPGlobalMigrationParams_t xPeerParams = { "G_PEER", 21, pdMS_TO_TICKS( 100 ) };
 
 static void prvBusyWorkTicks( TickType_t xDurationTicks )
 {
@@ -90,11 +90,17 @@ void main_edf_test( void )
 {
     BaseType_t xHintedCreate;
     BaseType_t xPeerCreate;
+    SMPGlobalMigrationParams_t * pxTaskParams[] = { &xHintedParams, &xPeerParams };
+    size_t xIndex;
 
-    gpio_init( 14 );
-    gpio_set_dir( 14, GPIO_OUT );
-    gpio_init( 15 );
-    gpio_set_dir( 15, GPIO_OUT );
+    for( xIndex = 0; xIndex < ( sizeof( pxTaskParams ) / sizeof( pxTaskParams[ 0 ] ) ); xIndex++ )
+    {
+        if( pxTaskParams[ xIndex ]->iPin >= 0 )
+        {
+            gpio_init( ( uint ) pxTaskParams[ xIndex ]->iPin );
+            gpio_set_dir( ( uint ) pxTaskParams[ xIndex ]->iPin, GPIO_OUT );
+        }
+    }
 
     xHintedCreate = xTaskCreateEDFOnCore( vGlobalWorker,
                                           xHintedParams.pcName,

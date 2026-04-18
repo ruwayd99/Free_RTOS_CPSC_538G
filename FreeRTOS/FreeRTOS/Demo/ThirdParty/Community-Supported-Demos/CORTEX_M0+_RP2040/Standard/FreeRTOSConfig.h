@@ -43,6 +43,7 @@
 #define configUSE_PREEMPTION                    1
 #define configUSE_TICKLESS_IDLE                 0
 #define configUSE_IDLE_HOOK                     0
+#define configUSE_PASSIVE_IDLE_HOOK             0
 #define configUSE_TICK_HOOK                     1
 #define configTICK_RATE_HZ                      ( ( TickType_t ) 1000 )
 #define configMAX_PRIORITIES                    32
@@ -116,7 +117,7 @@
 
 /* FreeRTOS CPSC_538G related configs*/
 #ifndef configUSE_SRP
-	#define configUSE_SRP    1    /* Enable Stack Resource Policy */
+	#define configUSE_SRP    0    /* Enable Stack Resource Policy */
 #endif
 
 #ifndef configMAX_SRP_RESOURCES
@@ -149,7 +150,7 @@
 /* SMP port only */
 /* Begin FreeRTOS CPSC_538G related - SMP - Task 4 multiprocessor controls */
 #ifndef configNUMBER_OF_CORES
-	#define configNUMBER_OF_CORES                   1
+	#define configNUMBER_OF_CORES                   2
 #endif
 
 #ifndef configTICK_CORE

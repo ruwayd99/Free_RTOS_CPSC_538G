@@ -13,11 +13,11 @@ typedef struct
 
 static SMPPartitionFitParams_t xTaskParams[] =
 {
-    { "P_U40", 16, pdMS_TO_TICKS( 60 ) },
-    { "P_U30A", 17, pdMS_TO_TICKS( 60 ) },
-    { "P_U30B", -1, pdMS_TO_TICKS( 60 ) },
-    { "P_U25A", -1, pdMS_TO_TICKS( 60 ) },
-    { "P_U25B", -1, pdMS_TO_TICKS( 60 ) },
+    { "P_U40", 10, pdMS_TO_TICKS( 60 ) },
+    { "P_U30A", 11, pdMS_TO_TICKS( 60 ) },
+    { "P_U30B", 12, pdMS_TO_TICKS( 60 ) },
+    { "P_U25A", 13, pdMS_TO_TICKS( 60 ) },
+    { "P_U25B", 18, pdMS_TO_TICKS( 60 ) },
     { "P_U80_REJECT", -1, pdMS_TO_TICKS( 60 ) }
 };
 
@@ -57,11 +57,16 @@ static void vPartitionWorker( void * pvParameters )
 void main_edf_test( void )
 {
     BaseType_t xCreateResults[ 6 ];
+    size_t xIndex;
 
-    gpio_init( 16 );
-    gpio_set_dir( 16, GPIO_OUT );
-    gpio_init( 17 );
-    gpio_set_dir( 17, GPIO_OUT );
+    for( xIndex = 0; xIndex < ( sizeof( xTaskParams ) / sizeof( xTaskParams[ 0 ] ) ); xIndex++ )
+    {
+        if( xTaskParams[ xIndex ].iPin >= 0 )
+        {
+            gpio_init( ( uint ) xTaskParams[ xIndex ].iPin );
+            gpio_set_dir( ( uint ) xTaskParams[ xIndex ].iPin, GPIO_OUT );
+        }
+    }
 
     printf( "[SMP][PARTITION][fit] creating U={0.40,0.30,0.30,0.25,0.25} then U=0.80 reject candidate\r\n" );
 

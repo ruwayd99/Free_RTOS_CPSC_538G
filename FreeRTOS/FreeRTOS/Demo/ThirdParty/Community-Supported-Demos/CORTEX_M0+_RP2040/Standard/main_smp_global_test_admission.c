@@ -55,15 +55,23 @@ void main_edf_test( void )
     BaseType_t xCreateB;
     BaseType_t xCreateC;
     BaseType_t xCreateReject;
+    SMPGlobalAdmissionParams_t * pxTaskParams[] =
+    {
+        &xTaskAParams,
+        &xTaskBParams,
+        &xTaskCParams,
+        &xTaskRejectParams
+    };
+    size_t xIndex;
 
-    gpio_init( 10 );
-    gpio_set_dir( 10, GPIO_OUT );
-    gpio_init( 11 );
-    gpio_set_dir( 11, GPIO_OUT );
-    gpio_init( 12 );
-    gpio_set_dir( 12, GPIO_OUT );
-    gpio_init( 13 );
-    gpio_set_dir( 13, GPIO_OUT );
+    for( xIndex = 0; xIndex < ( sizeof( pxTaskParams ) / sizeof( pxTaskParams[ 0 ] ) ); xIndex++ )
+    {
+        if( pxTaskParams[ xIndex ]->iPin >= 0 )
+        {
+            gpio_init( ( uint ) pxTaskParams[ xIndex ]->iPin );
+            gpio_set_dir( ( uint ) pxTaskParams[ xIndex ]->iPin, GPIO_OUT );
+        }
+    }
 
     printf( "[SMP][GLOBAL][admission] creating 3 admitted + 1 rejected implicit-deadline tasks\r\n" );
 

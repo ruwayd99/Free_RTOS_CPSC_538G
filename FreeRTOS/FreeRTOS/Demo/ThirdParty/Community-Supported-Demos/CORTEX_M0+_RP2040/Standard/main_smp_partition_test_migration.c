@@ -95,11 +95,17 @@ void main_edf_test( void )
 {
     BaseType_t xCreateA;
     BaseType_t xCreateB;
+    SMPPartitionMigrationParams_t * pxTaskParams[] = { &xTaskAParams, &xTaskBParams };
+    size_t xIndex;
 
-    gpio_init( 18 );
-    gpio_set_dir( 18, GPIO_OUT );
-    gpio_init( 19 );
-    gpio_set_dir( 19, GPIO_OUT );
+    for( xIndex = 0; xIndex < ( sizeof( pxTaskParams ) / sizeof( pxTaskParams[ 0 ] ) ); xIndex++ )
+    {
+        if( pxTaskParams[ xIndex ]->iPin >= 0 )
+        {
+            gpio_init( ( uint ) pxTaskParams[ xIndex ]->iPin );
+            gpio_set_dir( ( uint ) pxTaskParams[ xIndex ]->iPin, GPIO_OUT );
+        }
+    }
 
     xCreateA = xTaskCreateEDFOnCore( vPartitionWorker,
                                      xTaskAParams.pcName,
