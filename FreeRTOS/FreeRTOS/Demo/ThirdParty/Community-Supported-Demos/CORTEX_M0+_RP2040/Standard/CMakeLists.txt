@@ -205,12 +205,12 @@ add_single_test_bin(main_smp_global_test_migration
         ${SMP_TASK4_COMMON_DEFS}
         ${SMP_TASK4_GLOBAL_DEFS})
 
-# add_single_test_bin(main_smp_partition_test_fit
-#         mainCREATE_EDF_TEST=1
-#         ${SMP_TASK4_COMMON_DEFS}
-#         ${SMP_TASK4_PARTITION_DEFS})
+add_single_test_bin(main_smp_partition_test_fit
+        mainCREATE_EDF_TEST=1
+        ${SMP_TASK4_COMMON_DEFS}
+        ${SMP_TASK4_PARTITION_DEFS})
 
-# add_single_test_bin(main_smp_partition_test_migration
-#         mainCREATE_EDF_TEST=1
-#         ${SMP_TASK4_COMMON_DEFS}
-#         ${SMP_TASK4_PARTITION_DEFS})
+add_single_test_bin(main_smp_partition_test_migration
+        mainCREATE_EDF_TEST=1
+        ${SMP_TASK4_COMMON_DEFS}
+        ${SMP_TASK4_PARTITION_DEFS})
