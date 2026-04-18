@@ -2304,14 +2304,17 @@ static void prvEDFSelectHighestPriorityTask_SMP( BaseType_t xCoreID )
             continue;
         }
 
-        /* If the task is running on a different core, skip it (can't pick
-         * the same job twice in global EDF). Running-on-this-core is fine;
-         * it means we pick ourselves and keep going. */
-        if( ( pxTCB->xTaskRunState != taskTASK_NOT_RUNNING ) &&
-            ( pxTCB->xTaskRunState != xCoreID ) &&
-            ( pxTCB->xTaskRunState != taskTASK_SCHEDULED_TO_YIELD ) )
+        /* Only eligible if: currently not running on any core, OR already the
+         * current task on THIS core (self-reselect — possibly in
+         * SCHEDULED_TO_YIELD state).  A task running on any OTHER core — even
+         * in SCHEDULED_TO_YIELD — must not be picked here, otherwise two cores
+         * would believe they own the same TCB until the yield completes. */
+        if( pxTCB->xTaskRunState != taskTASK_NOT_RUNNING )
         {
-            continue;
+            if( pxTCB != pxCurrentTCBs[ xCoreID ] )
+            {
+                continue;
+            }
         }
 
         /* Found a candidate. Detach the previously running task on this core
@@ -6624,34 +6627,52 @@ BaseType_t xTaskIncrementTick( void )
                 }
             }
 
-            /* Cross-core preempt: if the head of xEDFReadyList has an earlier
-             * absolute deadline than either core's current job (and affinity
-             * allows), poke that core.  prvYieldForTask already handles the
-             * priority-list case on release; this covers the EDF ordering the
-             * priority heuristic cannot see. */
+            /* Cross-core preempt: if a ready EDF job has an earlier deadline
+             * than some core's current job, poke that core.  Skip any ready
+             * job that is already executing on a core — picking it on a
+             * second core would double-schedule the same TCB.  Walk the
+             * deadline-sorted xEDFReadyList until we find the first job that
+             * is not already running; that is the "pending" job we want to
+             * compare against. */
             if( listLIST_IS_EMPTY( &xEDFReadyList ) == pdFALSE )
             {
-                TCB_t * pxHead = ( TCB_t * ) listGET_OWNER_OF_HEAD_ENTRY( &xEDFReadyList );
+                const ListItem_t * pxEnd = listGET_END_MARKER( &xEDFReadyList );
+                const ListItem_t * pxIt;
+                TCB_t * pxPending = NULL;
 
-                for( xMpCore = 0; xMpCore < ( BaseType_t ) configNUMBER_OF_CORES; xMpCore++ )
+                for( pxIt = listGET_HEAD_ENTRY( &xEDFReadyList );
+                     pxIt != pxEnd;
+                     pxIt = listGET_NEXT( pxIt ) )
                 {
-                    TCB_t * pxMpCurrent = pxCurrentTCBs[ xMpCore ];
-                    if( ( pxMpCurrent != NULL ) &&
-                        ( pxMpCurrent != pxHead ) &&
-                        ( ( pxHead->uxCoreAffinityMask & ( 1U << xMpCore ) ) != 0U ) )
+                    TCB_t * pxCand = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxIt );
+                    if( pxCand->xTaskRunState == taskTASK_NOT_RUNNING )
                     {
-                        /* Idle or non-EDF current (xPeriod == 0), OR an EDF task
-                         * whose deadline is later than the pending head: preempt. */
-                        if( ( pxMpCurrent->xPeriod == 0U ) ||
-                            ( pxHead->xAbsoluteDeadline < pxMpCurrent->xAbsoluteDeadline ) )
+                        pxPending = pxCand;
+                        break;
+                    }
+                }
+
+                if( pxPending != NULL )
+                {
+                    for( xMpCore = 0; xMpCore < ( BaseType_t ) configNUMBER_OF_CORES; xMpCore++ )
+                    {
+                        TCB_t * pxMpCurrent = pxCurrentTCBs[ xMpCore ];
+                        if( ( pxMpCurrent != NULL ) &&
+                            ( pxMpCurrent != pxPending ) &&
+                            ( ( pxPending->uxCoreAffinityMask & ( 1U << xMpCore ) ) != 0U ) )
                         {
-                            if( xMpCore == ( BaseType_t ) portGET_CORE_ID() )
+                            if( ( pxMpCurrent->xPeriod == 0U ) ||
+                                ( pxPending->xAbsoluteDeadline < pxMpCurrent->xAbsoluteDeadline ) )
                             {
-                                xSwitchRequired = pdTRUE;
-                            }
-                            else
-                            {
-                                prvYieldCore( xMpCore );
+                                if( xMpCore == ( BaseType_t ) portGET_CORE_ID() )
+                                {
+                                    xSwitchRequired = pdTRUE;
+                                }
+                                else
+                                {
+                                    prvYieldCore( xMpCore );
+                                }
+                                break;   /* One preempt per tick is enough. */
                             }
                         }
                     }
