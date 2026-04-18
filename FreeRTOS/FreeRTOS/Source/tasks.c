@@ -2478,12 +2478,6 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                                 prvAddTaskToReadyList( pxTCB );
                             }
 
-                            edfTRACE( "[EDF][tick=%lu][partition-migrate] task=%s from=%ld to=%ld\r\n",
-                                      ( unsigned long ) xTaskGetTickCount(),
-                                      pxTCB->pcTaskName,
-                                      ( long ) xOldCore,
-                                      ( long ) xNewCoreID );
-
                             prvSMPRequestRescheduleForEDF();
                             xReturn = pdPASS;
                         }
@@ -2508,10 +2502,6 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                         prvYieldCore( pxTCB->xTaskRunState );
                     }
 
-                    edfTRACE( "[EDF][tick=%lu][global-affinity] task=%s target_core=%ld\r\n",
-                              ( unsigned long ) xTaskGetTickCount(),
-                              pxTCB->pcTaskName,
-                              ( long ) xNewCoreID );
 
                     prvSMPRequestRescheduleForEDF();
                     xReturn = pdPASS;
@@ -2553,10 +2543,6 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                 {
                     prvYieldCore( pxTCB->xTaskRunState );
                 }
-
-                edfTRACE( "[EDF][tick=%lu][core-remove] task=%s\r\n",
-                          ( unsigned long ) xTaskGetTickCount(),
-                          pxTCB->pcTaskName );
             }
         }
         taskEXIT_CRITICAL();
