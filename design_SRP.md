@@ -79,7 +79,7 @@ tasks can never overlap.
 Each resource keeps a compact array of `SRPHolderRecord_t` entries
 (`{xHolder, uxUnitsHeld, uxHolderLevel}`) and a count `uxHolderCount`.
 Multiple tasks can hold non-overlapping units of the same resource
-simultaneously — each gets its own slot.
+simultaneously with each getting its own slot.
 
 `xSRPResourceTake` first scans the array for the calling task:
 
