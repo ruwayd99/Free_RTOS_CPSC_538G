@@ -1,4 +1,4 @@
-# CBS (Constant Bandwidth Server) - Design Document
+# CBS - Design Document
 
 ## 1. Overview
 
@@ -8,19 +8,13 @@ The implementation in this repository keeps the CBS behavior integrated with the
 
 ## 2. Core Model
 
-### 2.1 Reservation parameters
-A CBS task uses two fixed parameters:
-
-- `Q_s`: server budget
-- `T_s`: server period
-
-The bandwidth of the server is:
+### 2.1 CBS Knowledge (we put this here mostly for our reference)
+CBS is defined as the ordered pair $$(Q_{CBS}, T_{CBS})$$
+And bandwidth of the server is:
 
 $$
-B = \frac{Q_s}{T_s}
+U_{CBS} = \frac{Q_{CBS}}{T_{CBS}}
 $$
-
-This implementation treats that ratio as the amount of CPU time the server is allowed to consume in each period.
 
 ### 2.2 Task state
 Each CBS task carries its own server state in the TCB:
@@ -43,8 +37,8 @@ Conceptually:
 1. Task runs.
 2. Budget decreases.
 3. Budget reaches zero.
-4. Deadline is postponed by `T_s`.
-5. Budget is replenished back to `Q_s`.
+4. Deadline is postponed by `T_{CBS}`.
+5. Budget is replenished back to `Q_{CBS}`.
 6. EDF sees the new deadline and continues ordering tasks normally.
 
 ### 3.2 Deadline tie-breaking
@@ -66,6 +60,21 @@ That ensures the CBS deadline and budget are refreshed consistently even when ap
 ### 4.1 Task creation
 `xTaskCreateCBS()` creates a normal task, marks it as CBS-managed, initializes the server fields, and inserts it into the EDF ready structure with the CBS virtual deadline.
 
+Function signature (for quick reference):
+
+```c
+BaseType_t xTaskCreateCBS(
+	TaskFunction_t pxTaskCode,
+	const char * const pcName,
+	const configSTACK_DEPTH_TYPE uxStackDepth,
+	void * const pvParameters,
+	TickType_t xPeriod,
+	TickType_t xRelativeDeadline,
+	TickType_t xMaxBudget,
+	TaskHandle_t * const pxCreatedTask
+);
+```
+
 ### 4.2 EDF interaction
 CBS does not replace EDF. The EDF ready list is still the scheduler's ordering mechanism; CBS just changes how the task's deadline evolves over time.
 
@@ -83,7 +92,21 @@ A CBS task can be released through notifications or event unblocks after having 
 ### 5.3 Why the implementation is tick based
 The repo's RP2040 demo runs with a 1 kHz tick, so tick-based budget accounting is a practical fit. It keeps the implementation simple and consistent with the rest of the FreeRTOS kernel paths.
 
-## 6. Interaction with the Demo Application
+## 6. System Design Diagram
+
+```mermaid
+flowchart LR
+	A[Periodic EDF Tasks] --> B[EDF Ready Ordering]
+	T[Trigger Task] --> N[Task Notification]
+	N --> C[CBS Worker Task]
+	C --> D[CBS Budget Tracker]
+	D -->|budget available| B
+	D -->|budget exhausted| E[Postpone Virtual Deadline]
+	E --> B
+	B --> F[Dispatcher]
+```
+
+## 7. Interaction with the Demo Application
 
 The CBS demo applications use a trigger task to notify the CBS worker task. That matches the implementation model above:
 
@@ -93,7 +116,7 @@ The CBS demo applications use a trigger task to notify the CBS worker task. That
 
 The dynamic multi-task CBS test further validates that the server remains stable when more periodic tasks are introduced after startup and when more than one CBS worker is active.
 
-## 7. Summary
+## 8. Summary
 
 The design is a straightforward EDF-plus-reservation model:
 
