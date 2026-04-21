@@ -39,70 +39,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-# add_executable(main_full
-#         main.c
-#         main_full.c
-#         IntQueueTimer.c
-#         RegTest.s
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/blocktim.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/countsem.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/dynamic.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/recmutex.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/QueueOverwrite.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/EventGroupsDemo.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/IntSemTest.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/IntQueue.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/TaskNotify.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/TimerDemo.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/GenQTest.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/death.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/semtest.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/BlockQ.c
-#         ${FREERTOS_DEMO_PATH}/Common/Minimal/flop.c
-#         )
-
-# target_compile_definitions(main_full PRIVATE
-#         mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=0
-#         )
-
-# target_include_directories(main_full PRIVATE
-#         ${CMAKE_CURRENT_LIST_DIR}
-#         ${FREERTOS_DEMO_PATH}/Common/include)
-
-# target_compile_definitions(main_full PRIVATE
-#         PICO_STDIO_STACK_BUFFER_SIZE=64 # use a small printf on stack buffer
-# )
-
-# target_compile_options( main_full PUBLIC
-#         ### Gnu/Clang C Options
-#         $<$<COMPILE_LANG_AND_ID:C,GNU>:-fdiagnostics-color=always>
-#         $<$<COMPILE_LANG_AND_ID:C,Clang>:-fcolor-diagnostics>
-
-#         $<$<COMPILE_LANG_AND_ID:C,Clang,GNU>:-Wall>
-#         $<$<COMPILE_LANG_AND_ID:C,Clang,GNU>:-Wextra>
-#         $<$<COMPILE_LANG_AND_ID:C,Clang,GNU>:-Werror>
-#         $<$<COMPILE_LANG_AND_ID:C,Clang>:-Weverything>
-#         )
-
-# target_link_libraries(main_full pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap4)
-# pico_add_extra_outputs(main_full)
-
-# add_executable(main_blinky
-#         main.c
-#         main_blinky.c
-#         )
-
-# target_compile_definitions(main_blinky PRIVATE
-#         mainCREATE_SIMPLE_BLINKY_DEMO_ONLY=1
-#         )
-
-# target_include_directories(main_blinky PRIVATE
-#         ${CMAKE_CURRENT_LIST_DIR}
-#         ${FREERTOS_DEMO_PATH}/Common/include)
-
-# target_link_libraries(main_blinky pico_stdlib FreeRTOS-Kernel FreeRTOS-Kernel-Heap1)
-# pico_add_extra_outputs(main_blinky)
-
 function(add_single_test_bin target_name)
         add_executable(${target_name}
                 main.c
@@ -128,8 +64,49 @@ function(add_single_test_bin target_name)
         pico_add_extra_outputs(${target_name})
 endfunction()
 
-# Begin FreeRTOS CPSC_538G related - SMP - Task 4 mode-specific test compile definitions
-set(SMP_TASK4_COMMON_DEFS
+set(EDF_COMMON_DEFS
+        configUSE_EDF_SCHEDULING=1
+        configNUMBER_OF_CORES=1
+        configTICK_CORE=0
+        configRUN_MULTIPLE_PRIORITIES=0
+        configUSE_CORE_AFFINITY=0
+        configUSE_PASSIVE_IDLE_HOOK=0
+        configUSE_SRP=1
+        configUSE_CBS=0
+        configGLOBAL_EDF_ENABLE=1
+        configPARTITIONED_EDF_ENABLE=0
+        configEDF_TRACE_ENABLE=1
+        )
+
+set(SRP_COMMON_DEFS
+        configUSE_EDF_SCHEDULING=1
+        configNUMBER_OF_CORES=1
+        configTICK_CORE=0
+        configRUN_MULTIPLE_PRIORITIES=0
+        configUSE_CORE_AFFINITY=0
+        configUSE_PASSIVE_IDLE_HOOK=0
+        configUSE_SRP=1
+        configUSE_CBS=0
+        configGLOBAL_EDF_ENABLE=1
+        configPARTITIONED_EDF_ENABLE=0
+        configEDF_TRACE_ENABLE=1
+        )
+
+set(CBS_COMMON_DEFS
+        configUSE_EDF_SCHEDULING=1
+        configNUMBER_OF_CORES=1
+        configTICK_CORE=0
+        configRUN_MULTIPLE_PRIORITIES=0
+        configUSE_CORE_AFFINITY=0
+        configUSE_PASSIVE_IDLE_HOOK=0
+        configUSE_SRP=0
+        configUSE_CBS=1
+        configGLOBAL_EDF_ENABLE=1
+        configPARTITIONED_EDF_ENABLE=0
+        configEDF_TRACE_ENABLE=1
+        )
+
+set(SMP_COMMON_DEFS
         configUSE_EDF_SCHEDULING=1
         configNUMBER_OF_CORES=2
         configTICK_CORE=0
@@ -141,55 +118,74 @@ set(SMP_TASK4_COMMON_DEFS
         configEDF_TRACE_ENABLE=1
         )
 
-set(SMP_TASK4_GLOBAL_DEFS
+set(SMP_GLOBAL_DEFS
         configGLOBAL_EDF_ENABLE=1
         configPARTITIONED_EDF_ENABLE=0
         )
 
-set(SMP_TASK4_PARTITION_DEFS
+set(SMP_PARTITION_DEFS
         configGLOBAL_EDF_ENABLE=0
         configPARTITIONED_EDF_ENABLE=1
         )
-# End FreeRTOS CPSC_538G related - SMP - Task 4 mode-specific test compile definitions
 
 ###############################################################################################
 #                                       EDF
 ###############################################################################################
-# # EDF test target (from Assignment Guide Section 5)
-# add_single_test_bin(main_edf_test mainCREATE_EDF_TEST=1)
+# EDF test target (from Assignment Guide Section 5)
+add_single_test_bin(main_edf_test
+        mainCREATE_EDF_TEST=1
+        ${EDF_COMMON_DEFS})
 
-# # Previous EDF test variant target
-# add_single_test_bin(main_edf_test_previous mainCREATE_EDF_TEST=1)
+# Previous EDF test variant target
+add_single_test_bin(main_edf_test_previous
+        mainCREATE_EDF_TEST=1
+        ${EDF_COMMON_DEFS})
 
-# # EDF dynamic admission control test (8 tasks: 6 startup + 2 runtime + reject + accept)
-# add_single_test_bin(main_edf_test_dynamic mainCREATE_EDF_TEST=1)
+# EDF dynamic admission control test (8 tasks: 6 startup + 2 runtime + reject + accept)
+add_single_test_bin(main_edf_test_dynamic
+        mainCREATE_EDF_TEST=1
+        ${EDF_COMMON_DEFS})
 
-# # EDF 100-task admission control test (professor README requirement)
-# add_single_test_bin(main_edf_test_100 mainCREATE_EDF_TEST=1)
+# EDF 100-task admission control test (professor README requirement)
+add_single_test_bin(main_edf_test_100
+        mainCREATE_EDF_TEST=1
+        ${EDF_COMMON_DEFS})
 
 ###############################################################################################
 #                                       SRP
 ###############################################################################################
-# # SRP basic test (existing test from Assignment 2)
-# add_single_test_bin(main_srp_test mainCREATE_EDF_TEST=1)
+# SRP basic test (existing test from Assignment 2)
+add_single_test_bin(main_srp_test
+        mainCREATE_EDF_TEST=1
+        ${SRP_COMMON_DEFS})
 
-# # SRP dynamic test (3 multi-unit resources, nested access, runtime admit/reject)
-# add_single_test_bin(main_srp_test_dynamic mainCREATE_EDF_TEST=1)
+# SRP dynamic test (3 multi-unit resources, nested access, runtime admit/reject)
+add_single_test_bin(main_srp_test_dynamic
+        mainCREATE_EDF_TEST=1
+        ${SRP_COMMON_DEFS})
 
-# # SRP 100-task stack-sharing quantitative test (professor README requirement)
-# add_single_test_bin(main_srp_test_100 mainCREATE_EDF_TEST=1)
+# SRP 100-task stack-sharing quantitative test (professor README requirement)
+add_single_test_bin(main_srp_test_100
+        mainCREATE_EDF_TEST=1
+        ${SRP_COMMON_DEFS})
 
 ###############################################################################################
 #                                       CBS
 ###############################################################################################
-# # CBS basic (high utilization)
-# add_single_test_bin(main_cbs_test mainCREATE_CBS_TEST=1)
+# CBS basic (high utilization)
+add_single_test_bin(main_cbs_test
+        mainCREATE_CBS_TEST=1
+        ${CBS_COMMON_DEFS})
 
-# # CBS workload test. Multiple tasks, dynamic task dispatch
-# add_single_test_bin(main_cbs_test_dynamic_multi mainCREATE_CBS_TEST=1)
+# CBS workload test. Multiple tasks, dynamic task dispatch
+add_single_test_bin(main_cbs_test_dynamic_multi
+        mainCREATE_CBS_TEST=1
+        ${CBS_COMMON_DEFS})
 
-# # CBS workload test. Impossible execution workload. Test overrun management.
-# add_single_test_bin(main_cbs_test_overrun mainCREATE_CBS_TEST=1)
+# CBS workload test. Impossible execution workload. Test overrun management.
+add_single_test_bin(main_cbs_test_overrun
+        mainCREATE_CBS_TEST=1
+        ${CBS_COMMON_DEFS})
 
 
 ###############################################################################################
@@ -197,20 +193,20 @@ set(SMP_TASK4_PARTITION_DEFS
 ###############################################################################################
 add_single_test_bin(main_smp_global_test_admission
         mainCREATE_EDF_TEST=1
-        ${SMP_TASK4_COMMON_DEFS}
-        ${SMP_TASK4_GLOBAL_DEFS})
+        ${SMP_COMMON_DEFS}
+        ${SMP_GLOBAL_DEFS})
 
 add_single_test_bin(main_smp_global_test_migration
         mainCREATE_EDF_TEST=1
-        ${SMP_TASK4_COMMON_DEFS}
-        ${SMP_TASK4_GLOBAL_DEFS})
+        ${SMP_COMMON_DEFS}
+        ${SMP_GLOBAL_DEFS})
 
 add_single_test_bin(main_smp_partition_test_fit
         mainCREATE_EDF_TEST=1
-        ${SMP_TASK4_COMMON_DEFS}
-        ${SMP_TASK4_PARTITION_DEFS})
+        ${SMP_COMMON_DEFS}
+        ${SMP_PARTITION_DEFS})
 
 add_single_test_bin(main_smp_partition_test_migration
         mainCREATE_EDF_TEST=1
-        ${SMP_TASK4_COMMON_DEFS}
-        ${SMP_TASK4_PARTITION_DEFS})
+        ${SMP_COMMON_DEFS}
+        ${SMP_PARTITION_DEFS})

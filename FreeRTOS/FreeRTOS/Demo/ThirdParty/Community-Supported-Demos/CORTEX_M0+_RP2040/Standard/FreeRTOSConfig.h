@@ -150,7 +150,7 @@
 /* SMP port only */
 /* Begin FreeRTOS CPSC_538G related - SMP - Task 4 multiprocessor controls */
 #ifndef configNUMBER_OF_CORES
-	#define configNUMBER_OF_CORES                   2
+	#define configNUMBER_OF_CORES                   1
 #endif
 
 #ifndef configTICK_CORE
