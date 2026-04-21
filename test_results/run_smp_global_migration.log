@@ -1,0 +1,101 @@
+FreeRTOS on core 0:
+[EDF][tick=0][admission] task=G_HINT C=300 T=1200 D=1200 result=ACCEPT reason=global GFB ok
+[EDF][tick=0][task-add] task=G_HINT mode=pre-start
+[EDF][tick=0][admission] task=G_PEER C=350 T=1500 D=1500 result=ACCEPT reason=global GFB ok
+[EDF][tick=0][task-add] task=G_PEER mode=pre-start
+[SMP][GLOBAL][startup] hinted=1 peer=1 admitted=2 rejected=0
+vTaskStartScheduler start
+vTaskStartScheduler before timer
+vTaskStartScheduler after timer
+vTaskStartScheduler timer end
+vTaskStartScheduler start config
+vTaskStartScheduler about to begin scheduling. Expect no more prints of this function afterwards.
+[SMP][GLOBAL][worker] task=G_PEER core=1 tick=0
+[SMP][GLOBAL][worker] task=G_HINT core=0 tick=0
+[EDF][tick=99][finish] task=G_HINT dl=1200 exec=0
+[EDF][tick=104][finish] task=G_PEER dl=1500 exec=0
+[EDF][tick=1200][release] task=G_HINT new_dl=2400
+[EDF][tick=1294][finish] task=G_HINT dl=2400 exec=0
+[EDF][tick=1500][release] task=G_PEER new_dl=3000
+[EDF][tick=1604][finish] task=G_PEER dl=3000 exec=0
+[EDF][tick=2400][release] task=G_HINT new_dl=3600
+[EDF][tick=2494][finish] task=G_HINT dl=3600 exec=0
+[EDF][tick=3000][release] task=G_PEER new_dl=4500
+[SMP][GLOBAL][controller] migrate hinted->core1 result=1
+[EDF][tick=3104][finish] task=G_PEER dl=4500 exec=0
+[EDF][tick=3600][release] task=G_HINT new_dl=4800
+[SMP][GLOBAL][worker] task=G_HINT core=1 tick=3604
+[EDF][tick=3699][finish] task=G_HINT dl=4800 exec=0
+[EDF][tick=4500][release] task=G_PEER new_dl=6000
+[EDF][tick=4604][finish] task=G_PEER dl=6000 exec=0
+[EDF][tick=4800][release] task=G_HINT new_dl=6000
+[EDF][tick=4894][finish] task=G_HINT dl=6000 exec=0
+[EDF][tick=6000][release] task=G_HINT new_dl=7200
+[EDF][tick=6000][release] task=G_PEER new_dl=7500
+[SMP][GLOBAL][worker] task=G_PEER core=0 tick=6009
+[EDF][tick=6094][finish] task=G_HINT dl=7200 exec=0
+[SMP][GLOBAL][controller] removed peer task from scheduling set
+[EDF][tick=7200][release] task=G_HINT new_dl=8400
+[EDF][tick=7294][finish] task=G_HINT dl=8400 exec=0
+[EDF][tick=8400][release] task=G_HINT new_dl=9600
+[EDF][tick=8494][finish] task=G_HINT dl=9600 exec=0
+[EDF][tick=9600][release] task=G_HINT new_dl=10800
+[EDF][tick=9694][finish] task=G_HINT dl=10800 exec=0
+[EDF][tick=10800][release] task=G_HINT new_dl=12000
+[EDF][tick=10894][finish] task=G_HINT dl=12000 exec=0
+[EDF][tick=12000][release] task=G_HINT new_dl=13200
+[EDF][tick=12094][finish] task=G_HINT dl=13200 exec=0
+[EDF][tick=13200][release] task=G_HINT new_dl=14400
+[EDF][tick=13294][finish] task=G_HINT dl=14400 exec=0
+[EDF][tick=14400][release] task=G_HINT new_dl=15600
+[EDF][tick=14494][finish] task=G_HINT dl=15600 exec=0
+[EDF][tick=15600][release] task=G_HINT new_dl=16800
+[EDF][tick=15694][finish] task=G_HINT dl=16800 exec=0
+[EDF][tick=16800][release] task=G_HINT new_dl=18000
+[EDF][tick=16894][finish] task=G_HINT dl=18000 exec=0
+[EDF][tick=18000][release] task=G_HINT new_dl=19200
+[EDF][tick=18094][finish] task=G_HINT dl=19200 exec=0
+[EDF][tick=19200][release] task=G_HINT new_dl=20400
+[EDF][tick=19294][finish] task=G_HINT dl=20400 exec=0
+[EDF][tick=20400][release] task=G_HINT new_dl=21600
+[EDF][tick=20494][finish] task=G_HINT dl=21600 exec=0
+[EDF][tick=21600][release] task=G_HINT new_dl=22800
+[EDF][tick=21694][finish] task=G_HINT dl=22800 exec=0
+[EDF][tick=22800][release] task=G_HINT new_dl=24000
+[EDF][tick=22894][finish] task=G_HINT dl=24000 exec=0
+[EDF][tick=24000][release] task=G_HINT new_dl=25200
+[EDF][tick=24094][finish] task=G_HINT dl=25200 exec=0
+[EDF][tick=25200][release] task=G_HINT new_dl=26400
+[EDF][tick=25294][finish] task=G_HINT dl=26400 exec=0
+[EDF][tick=26400][release] task=G_HINT new_dl=27600
+[EDF][tick=26494][finish] task=G_HINT dl=27600 exec=0
+[EDF][tick=27600][release] task=G_HINT new_dl=28800
+[EDF][tick=27694][finish] task=G_HINT dl=28800 exec=0
+[EDF][tick=28800][release] task=G_HINT new_dl=30000
+[EDF][tick=28894][finish] task=G_HINT dl=30000 exec=0
+[EDF][tick=30000][release] task=G_HINT new_dl=31200
+[EDF][tick=30094][finish] task=G_HINT dl=31200 exec=0
+[EDF][tick=31200][release] task=G_HINT new_dl=32400
+[EDF][tick=31294][finish] task=G_HINT dl=32400 exec=0
+[EDF][tick=32400][release] task=G_HINT new_dl=33600
+[EDF][tick=32494][finish] task=G_HINT dl=33600 exec=0
+[EDF][tick=33600][release] task=G_HINT new_dl=34800
+[EDF][tick=33694][finish] task=G_HINT dl=34800 exec=0
+[EDF][tick=34800][release] task=G_HINT new_dl=36000
+[EDF][tick=34894][finish] task=G_HINT dl=36000 exec=0
+[EDF][tick=36000][release] task=G_HINT new_dl=37200
+[EDF][tick=36094][finish] task=G_HINT dl=37200 exec=0
+[EDF][tick=37200][release] task=G_HINT new_dl=38400
+[EDF][tick=37294][finish] task=G_HINT dl=38400 exec=0
+[EDF][tick=38400][release] task=G_HINT new_dl=39600
+[EDF][tick=38494][finish] task=G_HINT dl=39600 exec=0
+[EDF][tick=39600][release] task=G_HINT new_dl=40800
+[EDF][tick=39694][finish] task=G_HINT dl=40800 exec=0
+[EDF][tick=40800][release] task=G_HINT new_dl=42000
+[EDF][tick=40894][finish] task=G_HINT dl=42000 exec=0
+[EDF][tick=42000][release] task=G_HINT new_dl=43200
+[EDF][tick=42094][finish] task=G_HINT dl=43200 exec=0
+[EDF][tick=43200][release] task=G_HINT new_dl=44400
+[EDF][tick=43294][finish] task=G_HINT dl=44400 exec=0
+[EDF][tick=44400][release] task=G_HINT new_dl=45600
+

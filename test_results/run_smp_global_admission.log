@@ -1,0 +1,128 @@
+
+FreeRTOS on core 0:
+[SMP][GLOBAL][admission] creating 3 admitted + 1 rejected implicit-deadline tasks
+[EDF][tick=0][admission] task=G_A C=200 T=1000 D=1000 result=ACCEPT reason=global GFB ok
+[EDF][tick=0][task-add] task=G_A mode=pre-start
+[EDF][tick=0][admission] task=G_B C=250 T=1000 D=1000 result=ACCEPT reason=global GFB ok
+[EDF][tick=0][task-add] task=G_B mode=pre-start
+[EDF][tick=0][admission] task=G_C C=300 T=1000 D=1000 result=ACCEPT reason=global GFB ok
+[EDF][tick=0][task-add] task=G_C mode=pre-start
+[EDF][tick=0][admission] task=G_REJECT C=900 T=1000 D=1000 result=REJECT reason=global GFB fail
+[SMP][GLOBAL][admission] create A=1 B=1 C=1 reject=0 admitted=3 rejected=1
+vTaskStartScheduler start
+vTaskStartScheduler before timer
+vTaskStartScheduler after timer
+vTaskStartScheduler timer end
+vTaskStartScheduler start config
+vTaskStartScheduler about to begin scheduling. Expect no more prints of this function afterwards.
+[EDF][tick=80][finish] task=G_A dl=1000 exec=0
+[EDF][tick=100][finish] task=G_B dl=1000 exec=0
+[EDF][tick=204][finish] task=G_C dl=1000 exec=0
+[EDF][tick=1000][release] task=G_A new_dl=2000
+[EDF][tick=1000][release] task=G_B new_dl=2000
+[EDF][tick=1084][finish] task=G_A dl=2000 exec=0
+[EDF][tick=1088][release] task=G_C new_dl=2000
+[EDF][tick=1108][finish] task=G_B dl=2000 exec=0
+[EDF][tick=1212][finish] task=G_C dl=2000 exec=0
+[EDF][tick=2000][release] task=G_A new_dl=3000
+[EDF][tick=2000][release] task=G_B new_dl=3000
+[EDF][tick=2084][finish] task=G_A dl=3000 exec=0
+[EDF][tick=2088][release] task=G_C new_dl=3000
+[EDF][tick=2108][finish] task=G_B dl=3000 exec=0
+[EDF][tick=2212][finish] task=G_C dl=3000 exec=0
+[EDF][tick=3000][release] task=G_A new_dl=4000
+[EDF][tick=3000][release] task=G_B new_dl=4000
+[EDF][tick=3084][finish] task=G_A dl=4000 exec=0
+[EDF][tick=3088][release] task=G_C new_dl=4000
+[EDF][tick=3108][finish] task=G_B dl=4000 exec=0
+[EDF][tick=3212][finish] task=G_C dl=4000 exec=0
+[EDF][tick=4000][release] task=G_A new_dl=5000
+[EDF][tick=4000][release] task=G_B new_dl=5000
+[EDF][tick=4084][finish] task=G_A dl=5000 exec=0
+[EDF][tick=4088][release] task=G_C new_dl=5000
+[EDF][tick=4108][finish] task=G_B dl=5000 exec=0
+[EDF][tick=4212][finish] task=G_C dl=5000 exec=0
+[EDF][tick=5000][release] task=G_A new_dl=6000
+[EDF][tick=5000][release] task=G_B new_dl=6000
+[EDF][tick=5084][finish] task=G_A dl=6000 exec=0
+[EDF][tick=5088][release] task=G_C new_dl=6000
+[EDF][tick=5108][finish] task=G_B dl=6000 exec=0
+[EDF][tick=5212][finish] task=G_C dl=6000 exec=0
+[EDF][tick=6000][release] task=G_A new_dl=7000
+[EDF][tick=6000][release] task=G_B new_dl=7000
+[EDF][tick=6084][finish] task=G_A dl=7000 exec=0
+[EDF][tick=6088][release] task=G_C new_dl=7000
+[EDF][tick=6108][finish] task=G_B dl=7000 exec=0
+[EDF][tick=6212][finish] task=G_C dl=7000 exec=0
+[EDF][tick=7000][release] task=G_A new_dl=8000
+[EDF][tick=7000][release] task=G_B new_dl=8000
+[EDF][tick=7084][finish] task=G_A dl=8000 exec=0
+[EDF][tick=7088][release] task=G_C new_dl=8000
+[EDF][tick=7108][finish] task=G_B dl=8000 exec=0
+[EDF][tick=7212][finish] task=G_C dl=8000 exec=0
+[EDF][tick=8000][release] task=G_A new_dl=9000
+[EDF][tick=8000][release] task=G_B new_dl=9000
+[EDF][tick=8084][finish] task=G_A dl=9000 exec=0
+[EDF][tick=8088][release] task=G_C new_dl=9000
+[EDF][tick=8108][finish] task=G_B dl=9000 exec=0
+[EDF][tick=8212][finish] task=G_C dl=9000 exec=0
+[EDF][tick=9000][release] task=G_A new_dl=10000
+[EDF][tick=9000][release] task=G_B new_dl=10000
+[EDF][tick=9084][finish] task=G_A dl=10000 exec=0
+[EDF][tick=9088][release] task=G_C new_dl=10000
+[EDF][tick=9108][finish] task=G_B dl=10000 exec=0
+[EDF][tick=9212][finish] task=G_C dl=10000 exec=0
+[EDF][tick=10000][release] task=G_A new_dl=11000
+[EDF][tick=10000][release] task=G_B new_dl=11000
+[EDF][tick=10084][finish] task=G_A dl=11000 exec=0
+[EDF][tick=10088][release] task=G_C new_dl=11000
+[EDF][tick=10108][finish] task=G_B dl=11000 exec=0
+[EDF][tick=10213][finish] task=G_C dl=11000 exec=0
+[EDF][tick=11000][release] task=G_A new_dl=12000
+[EDF][tick=11000][release] task=G_B new_dl=12000
+[EDF][tick=11084][finish] task=G_A dl=12000 exec=0
+[EDF][tick=11088][release] task=G_C new_dl=12000
+[EDF][tick=11108][finish] task=G_B dl=12000 exec=0
+[EDF][tick=11213][finish] task=G_C dl=12000 exec=0
+[EDF][tick=12000][release] task=G_A new_dl=13000
+[EDF][tick=12000][release] task=G_B new_dl=13000
+[EDF][tick=12084][finish] task=G_A dl=13000 exec=0
+[EDF][tick=12088][release] task=G_C new_dl=13000
+[EDF][tick=12108][finish] task=G_B dl=13000 exec=0
+[EDF][tick=12213][finish] task=G_C dl=13000 exec=0
+[EDF][tick=13000][release] task=G_A new_dl=14000
+[EDF][tick=13000][release] task=G_B new_dl=14000
+[EDF][tick=13084][finish] task=G_A dl=14000 exec=0
+[EDF][tick=13088][release] task=G_C new_dl=14000
+[EDF][tick=13108][finish] task=G_B dl=14000 exec=0
+[EDF][tick=13213][finish] task=G_C dl=14000 exec=0
+[EDF][tick=14000][release] task=G_A new_dl=15000
+[EDF][tick=14000][release] task=G_B new_dl=15000
+[EDF][tick=14084][finish] task=G_A dl=15000 exec=0
+[EDF][tick=14088][release] task=G_C new_dl=15000
+[EDF][tick=14108][finish] task=G_B dl=15000 exec=0
+[EDF][tick=14213][finish] task=G_C dl=15000 exec=0
+[EDF][tick=15000][release] task=G_A new_dl=16000
+[EDF][tick=15000][release] task=G_B new_dl=16000
+[EDF][tick=15084][finish] task=G_A dl=16000 exec=0
+[EDF][tick=15088][release] task=G_C new_dl=16000
+[EDF][tick=15108][finish] task=G_B dl=16000 exec=0
+[EDF][tick=15213][finish] task=G_C dl=16000 exec=0
+[EDF][tick=16000][release] task=G_A new_dl=17000
+[EDF][tick=16000][release] task=G_B new_dl=17000
+[EDF][tick=16084][finish] task=G_A dl=17000 exec=0
+[EDF][tick=16088][release] task=G_C new_dl=17000
+[EDF][tick=16108][finish] task=G_B dl=17000 exec=0
+[EDF][tick=16213][finish] task=G_C dl=17000 exec=0
+[EDF][tick=17000][release] task=G_A new_dl=18000
+[EDF][tick=17000][release] task=G_B new_dl=18000
+[EDF][tick=17084][finish] task=G_A dl=18000 exec=0
+[EDF][tick=17088][release] task=G_C new_dl=18000
+[EDF][tick=17108][finish] task=G_B dl=18000 exec=0
+[EDF][tick=17213][finish] task=G_C dl=18000 exec=0
+[EDF][tick=18000][release] task=G_A new_dl=19000
+[EDF][tick=18000][release] task=G_B new_dl=19000
+[EDF][tick=18084][finish] task=G_A dl=19000 exec=0
+[EDF][tick=18088][release] task=G_C new_dl=19000
+[EDF][tick=18108][finish] task=G_B dl=19000 exec=0
+[EDF][tick=18213][finish] task=G_C dl=19000 exec=0

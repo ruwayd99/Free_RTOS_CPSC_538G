@@ -1,0 +1,57 @@
+FreeRTOS on core 0:
+[EDF][tick=0][admission] task=P_A_U70 C=700 T=1000 D=1000 result=ACCEPT reason=partitioned fit
+[EDF][tick=0][task-add] task=P_A_U70 mode=pre-start-pending
+[EDF][tick=0][admission] task=P_B_U40 C=400 T=1000 D=1000 result=ACCEPT reason=partitioned fit
+[EDF][tick=0][task-add] task=P_B_U40 mode=pre-start-pending
+[SMP][PARTITION][startup] createA=1 createB=1 admitted=2 rejected=0
+vTaskStartScheduler start
+vTaskStartScheduler before timer
+vTaskStartScheduler after timer
+vTaskStartScheduler timer end
+[EDF][tick=0][partition-bind] task=P_A_U70 core=0 Uu=700000 mode=pre-start
+[EDF][tick=0][partition-bind] task=P_B_U40 core=1 Uu=400000 mode=pre-start
+vTaskStartScheduler start config
+vTaskStartScheduler about to begin scheduling. Expect no more prints of this function afterwards.
+[SMP][PARTITION][worker] task=P_B_U40 core=1 tick=0
+[SMP][PARTITION][worker] task=P_A_U70 core=0 tick=0
+[EDF][tick=125][finish] task=P_B_U40 dl=1000 exec=0
+[EDF][tick=129][finish] task=P_A_U70 dl=1000 exec=0
+[EDF][tick=1000][release] task=P_B_U40 new_dl=2000
+[EDF][tick=1000][release] task=P_A_U70 new_dl=2000
+[EDF][tick=1124][finish] task=P_B_U40 dl=2000 exec=0
+[EDF][tick=1129][finish] task=P_A_U70 dl=2000 exec=0
+[EDF][tick=2000][release] task=P_B_U40 new_dl=3000
+[EDF][tick=2000][release] task=P_A_U70 new_dl=3000
+[EDF][tick=2124][finish] task=P_B_U40 dl=3000 exec=0
+[EDF][tick=2129][finish] task=P_A_U70 dl=3000 exec=0
+[EDF][tick=3000][release] task=P_B_U40 new_dl=4000
+[EDF][tick=3000][release] task=P_A_U70 new_dl=4000
+[EDF][tick=3124][finish] task=P_B_U40 dl=4000 exec=0
+[SMP][PARTITION][controller] migrate B->core0 expect fail result=0
+[SMP][PARTITION][controller] removed A from core assignment
+[EDF][tick=4000][release] task=P_B_U40 new_dl=5000
+[EDF][tick=4124][finish] task=P_B_U40 dl=5000 exec=0
+[SMP][PARTITION][controller] migrate B->core0 after remove expect pass result=1
+[EDF][tick=5000][release] task=P_B_U40 new_dl=6000
+[SMP][PARTITION][worker] task=P_B_U40 core=0 tick=5004
+[EDF][tick=5129][finish] task=P_B_U40 dl=6000 exec=0
+[EDF][tick=6000][release] task=P_B_U40 new_dl=7000
+[EDF][tick=6124][finish] task=P_B_U40 dl=7000 exec=0
+[EDF][tick=7000][release] task=P_B_U40 new_dl=8000
+[EDF][tick=7124][finish] task=P_B_U40 dl=8000 exec=0
+[EDF][tick=8000][release] task=P_B_U40 new_dl=9000
+[EDF][tick=8124][finish] task=P_B_U40 dl=9000 exec=0
+[EDF][tick=9000][release] task=P_B_U40 new_dl=10000
+[EDF][tick=9124][finish] task=P_B_U40 dl=10000 exec=0
+[EDF][tick=10000][release] task=P_B_U40 new_dl=11000
+[EDF][tick=10124][finish] task=P_B_U40 dl=11000 exec=0
+[EDF][tick=11000][release] task=P_B_U40 new_dl=12000
+[EDF][tick=11124][finish] task=P_B_U40 dl=12000 exec=0
+[EDF][tick=12000][release] task=P_B_U40 new_dl=13000
+[EDF][tick=12124][finish] task=P_B_U40 dl=13000 exec=0
+[EDF][tick=13000][release] task=P_B_U40 new_dl=14000
+[EDF][tick=13124][finish] task=P_B_U40 dl=14000 exec=0
+[EDF][tick=14000][release] task=P_B_U40 new_dl=15000
+[EDF][tick=14124][finish] task=P_B_U40 dl=15000 exec=0
+[EDF][tick=15000][release] task=P_B_U40 new_dl=16000
+[EDF][tick=15124][finish] task=P_B_U40 dl=16000 exec=0

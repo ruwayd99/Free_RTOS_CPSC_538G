@@ -1,0 +1,409 @@
+FreeRTOS on core 0:
+[CBS TEST]
+[CBS TEST] Starting with 10 periodic tasks.
+[CBS TEST] Starting with 2 CBS tasks.
+[CBS TEST] Version 2.
+[CBS TEST] Pin map: initial periodic tasks use no GPIOs, subsequent PERIODIC_10..13 -> GPIO 10..13, CBS_0..3 -> GPIO 18..21
+[EDF][tick=0][admission] task=PERIODIC_0 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_0 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_1 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_1 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_2 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_2 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_3 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_3 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_4 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_4 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_5 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_5 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_6 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_6 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_7 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_7 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_8 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_8 mode=pre-start
+[EDF][tick=0][admission] task=PERIODIC_9 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=0][task-add] task=PERIODIC_9 mode=pre-start
+vTaskStartScheduler start
+vTaskStartScheduler before timer
+vTaskStartScheduler after timer
+vTaskStartScheduler timer end
+vTaskStartScheduler start config
+vTaskStartScheduler about to begin scheduling. Expect no more prints of this function afterwards.
+[EDF][tick=120][finish] task=PERIODIC_0 dl=3000 exec=0
+[EDF][tick=245][finish] task=PERIODIC_1 dl=3000 exec=0
+[EDF][tick=369][finish] task=PERIODIC_2 dl=3000 exec=0
+[EDF][tick=493][finish] task=PERIODIC_3 dl=3000 exec=0
+[EDF][tick=617][finish] task=PERIODIC_4 dl=3000 exec=0
+[EDF][tick=741][finish] task=PERIODIC_5 dl=3000 exec=0
+[EDF][tick=865][finish] task=PERIODIC_6 dl=3000 exec=0
+[EDF][tick=989][finish] task=PERIODIC_7 dl=3000 exec=0
+[EDF][tick=1113][finish] task=PERIODIC_8 dl=3000 exec=0
+[EDF][tick=1238][finish] task=PERIODIC_9 dl=3000 exec=0
+[CBS TEST] [PERIODIC_DISPATCH] tick 1243 creating 4 subsequent tasks
+[EDF][tick=3000][release] task=PERIODIC_0 new_dl=6000
+[EDF][tick=3124][finish] task=PERIODIC_0 dl=6000 exec=0
+[EDF][tick=3129][release] task=PERIODIC_1 new_dl=6000
+[EDF][tick=3253][finish] task=PERIODIC_1 dl=6000 exec=0
+[EDF][tick=3258][release] task=PERIODIC_2 new_dl=6000
+[EDF][tick=3382][finish] task=PERIODIC_2 dl=6000 exec=0
+[EDF][tick=3387][release] task=PERIODIC_3 new_dl=6000
+[EDF][tick=3511][finish] task=PERIODIC_3 dl=6000 exec=0
+[EDF][tick=3516][release] task=PERIODIC_4 new_dl=6000
+[EDF][tick=3640][finish] task=PERIODIC_4 dl=6000 exec=0
+[EDF][tick=3645][release] task=PERIODIC_5 new_dl=6000
+[EDF][tick=3769][finish] task=PERIODIC_5 dl=6000 exec=0
+[EDF][tick=3774][release] task=PERIODIC_6 new_dl=6000
+[EDF][tick=3898][finish] task=PERIODIC_6 dl=6000 exec=0
+[EDF][tick=3903][release] task=PERIODIC_7 new_dl=6000
+[EDF][tick=4027][finish] task=PERIODIC_7 dl=6000 exec=0
+[EDF][tick=4032][release] task=PERIODIC_8 new_dl=6000
+[EDF][tick=4156][finish] task=PERIODIC_8 dl=6000 exec=0
+[EDF][tick=4161][release] task=PERIODIC_9 new_dl=6000
+[EDF][tick=4285][finish] task=PERIODIC_9 dl=6000 exec=0
+[CBS][tick=4310][budget_current] budget=180
+[CBS TEST] [CBS_0] job=1 START=4290 END=4311 trigger=4290
+[EDF][tick=4316][admission] task=PERIODIC_10 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=4316][task-add] task=PERIODIC_10 mode=runtime
+[EDF][tick=4437][finish] task=PERIODIC_10 dl=7316 exec=0
+[CBS][tick=4462][budget_current] budget=180
+[CBS TEST] [CBS_1] job=1 START=4442 END=4463 trigger=4442
+[EDF][tick=6000][release] task=PERIODIC_0 new_dl=9000
+[EDF][tick=6124][finish] task=PERIODIC_0 dl=9000 exec=0
+[EDF][tick=6129][release] task=PERIODIC_1 new_dl=9000
+[EDF][tick=6253][finish] task=PERIODIC_1 dl=9000 exec=0
+[EDF][tick=6258][release] task=PERIODIC_2 new_dl=9000
+[EDF][tick=6382][finish] task=PERIODIC_2 dl=9000 exec=0
+[EDF][tick=6387][release] task=PERIODIC_3 new_dl=9000
+[EDF][tick=6511][finish] task=PERIODIC_3 dl=9000 exec=0
+[EDF][tick=6516][release] task=PERIODIC_4 new_dl=9000
+[EDF][tick=6640][finish] task=PERIODIC_4 dl=9000 exec=0
+[EDF][tick=6645][release] task=PERIODIC_5 new_dl=9000
+[EDF][tick=6769][finish] task=PERIODIC_5 dl=9000 exec=0
+[EDF][tick=6774][release] task=PERIODIC_6 new_dl=9000
+[EDF][tick=6898][finish] task=PERIODIC_6 dl=9000 exec=0
+[EDF][tick=6903][release] task=PERIODIC_7 new_dl=9000
+[EDF][tick=7027][finish] task=PERIODIC_7 dl=9000 exec=0
+[EDF][tick=7032][release] task=PERIODIC_8 new_dl=9000
+[EDF][tick=7156][finish] task=PERIODIC_8 dl=9000 exec=0
+[EDF][tick=7161][release] task=PERIODIC_9 new_dl=9000
+[EDF][tick=7285][finish] task=PERIODIC_9 dl=9000 exec=0
+[CBS][tick=7310][budget_current] budget=180
+[CBS TEST] [CBS_2] job=1 START=7290 END=7311 trigger=7290
+[EDF][tick=7317][release] task=PERIODIC_10 new_dl=10316
+[EDF][tick=7442][finish] task=PERIODIC_10 dl=10316 exec=0
+[EDF][tick=7447][admission] task=PERIODIC_11 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=7447][task-add] task=PERIODIC_11 mode=runtime
+[EDF][tick=7568][finish] task=PERIODIC_11 dl=10447 exec=0
+[EDF][tick=9000][release] task=PERIODIC_0 new_dl=12000
+[EDF][tick=9124][finish] task=PERIODIC_0 dl=12000 exec=0
+[EDF][tick=9129][release] task=PERIODIC_1 new_dl=12000
+[EDF][tick=9254][finish] task=PERIODIC_1 dl=12000 exec=0
+[EDF][tick=9259][release] task=PERIODIC_2 new_dl=12000
+[EDF][tick=9384][finish] task=PERIODIC_2 dl=12000 exec=0
+[EDF][tick=9389][release] task=PERIODIC_3 new_dl=12000
+[EDF][tick=9514][finish] task=PERIODIC_3 dl=12000 exec=0
+[EDF][tick=9519][release] task=PERIODIC_4 new_dl=12000
+[EDF][tick=9644][finish] task=PERIODIC_4 dl=12000 exec=0
+[EDF][tick=9649][release] task=PERIODIC_5 new_dl=12000
+[EDF][tick=9774][finish] task=PERIODIC_5 dl=12000 exec=0
+[EDF][tick=9779][release] task=PERIODIC_6 new_dl=12000
+[EDF][tick=9904][finish] task=PERIODIC_6 dl=12000 exec=0
+[EDF][tick=9909][release] task=PERIODIC_7 new_dl=12000
+[EDF][tick=10034][finish] task=PERIODIC_7 dl=12000 exec=0
+[EDF][tick=10039][release] task=PERIODIC_8 new_dl=12000
+[EDF][tick=10164][finish] task=PERIODIC_8 dl=12000 exec=0
+[EDF][tick=10169][release] task=PERIODIC_9 new_dl=12000
+[EDF][tick=10294][finish] task=PERIODIC_9 dl=12000 exec=0
+[CBS][tick=10319][budget_current] budget=180
+[CBS TEST] [CBS_0] job=2 START=10299 END=10320 trigger=10299
+[EDF][tick=10325][release] task=PERIODIC_10 new_dl=13316
+[EDF][tick=10450][finish] task=PERIODIC_10 dl=13316 exec=0
+[EDF][tick=10455][release] task=PERIODIC_11 new_dl=13447
+[EDF][tick=10580][finish] task=PERIODIC_11 dl=13447 exec=0
+[EDF][tick=10585][admission] task=PERIODIC_12 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=10585][task-add] task=PERIODIC_12 mode=runtime
+[EDF][tick=10706][finish] task=PERIODIC_12 dl=13585 exec=0
+[CBS][tick=10731][budget_current] budget=180
+[CBS TEST] [CBS_1] job=2 START=10711 END=10732 trigger=10711
+[EDF][tick=12000][release] task=PERIODIC_0 new_dl=15000
+[EDF][tick=12125][finish] task=PERIODIC_0 dl=15000 exec=0
+[EDF][tick=12130][release] task=PERIODIC_1 new_dl=15000
+[EDF][tick=12255][finish] task=PERIODIC_1 dl=15000 exec=0
+[EDF][tick=12260][release] task=PERIODIC_2 new_dl=15000
+[EDF][tick=12385][finish] task=PERIODIC_2 dl=15000 exec=0
+[EDF][tick=12390][release] task=PERIODIC_3 new_dl=15000
+[EDF][tick=12515][finish] task=PERIODIC_3 dl=15000 exec=0
+[EDF][tick=12520][release] task=PERIODIC_4 new_dl=15000
+[EDF][tick=12645][finish] task=PERIODIC_4 dl=15000 exec=0
+[EDF][tick=12650][release] task=PERIODIC_5 new_dl=15000
+[EDF][tick=12775][finish] task=PERIODIC_5 dl=15000 exec=0
+[EDF][tick=12780][release] task=PERIODIC_6 new_dl=15000
+[EDF][tick=12905][finish] task=PERIODIC_6 dl=15000 exec=0
+[EDF][tick=12910][release] task=PERIODIC_7 new_dl=15000
+[EDF][tick=13035][finish] task=PERIODIC_7 dl=15000 exec=0
+[EDF][tick=13040][release] task=PERIODIC_8 new_dl=15000
+[EDF][tick=13165][finish] task=PERIODIC_8 dl=15000 exec=0
+[EDF][tick=13170][release] task=PERIODIC_9 new_dl=15000
+[EDF][tick=13295][finish] task=PERIODIC_9 dl=15000 exec=0
+[CBS][tick=13320][budget_current] budget=180
+[CBS TEST] [CBS_2] job=2 START=13300 END=13321 trigger=13300
+[EDF][tick=13326][release] task=PERIODIC_10 new_dl=16316
+[EDF][tick=13451][finish] task=PERIODIC_10 dl=16316 exec=0
+[EDF][tick=13456][release] task=PERIODIC_11 new_dl=16447
+[EDF][tick=13581][finish] task=PERIODIC_11 dl=16447 exec=0
+[EDF][tick=13586][release] task=PERIODIC_12 new_dl=16585
+[EDF][tick=13711][finish] task=PERIODIC_12 dl=16585 exec=0
+[EDF][tick=13716][admission] task=PERIODIC_13 C=120 T=3000 D=3000 result=ACCEPT reason=implicit U<=1
+[EDF][tick=13716][task-add] task=PERIODIC_13 mode=runtime
+[EDF][tick=13837][finish] task=PERIODIC_13 dl=16716 exec=0
+[CBS][tick=13862][budget_current] budget=180
+[CBS TEST] [CBS_3] job=1 START=13842 END=13863 trigger=13842
+[CBS TEST] [PERIODIC_DISPATCH] completed, deleting self at tick 13868
+[CBS][tick=13894][budget_current] budget=180
+[CBS TEST] [CBS_0] job=3 START=13874 END=13895 trigger=13874
+[EDF][tick=15000][release] task=PERIODIC_0 new_dl=18000
+[EDF][tick=15125][finish] task=PERIODIC_0 dl=18000 exec=0
+[EDF][tick=15130][release] task=PERIODIC_1 new_dl=18000
+[EDF][tick=15255][finish] task=PERIODIC_1 dl=18000 exec=0
+[EDF][tick=15260][release] task=PERIODIC_2 new_dl=18000
+[EDF][tick=15385][finish] task=PERIODIC_2 dl=18000 exec=0
+[EDF][tick=15390][release] task=PERIODIC_3 new_dl=18000
+[EDF][tick=15515][finish] task=PERIODIC_3 dl=18000 exec=0
+[EDF][tick=15520][release] task=PERIODIC_4 new_dl=18000
+[EDF][tick=15645][finish] task=PERIODIC_4 dl=18000 exec=0
+[EDF][tick=15650][release] task=PERIODIC_5 new_dl=18000
+[EDF][tick=15775][finish] task=PERIODIC_5 dl=18000 exec=0
+[EDF][tick=15780][release] task=PERIODIC_6 new_dl=18000
+[EDF][tick=15905][finish] task=PERIODIC_6 dl=18000 exec=0
+[EDF][tick=15910][release] task=PERIODIC_7 new_dl=18000
+[EDF][tick=16035][finish] task=PERIODIC_7 dl=18000 exec=0
+[EDF][tick=16040][release] task=PERIODIC_8 new_dl=18000
+[EDF][tick=16165][finish] task=PERIODIC_8 dl=18000 exec=0
+[EDF][tick=16170][release] task=PERIODIC_9 new_dl=18000
+[EDF][tick=16295][finish] task=PERIODIC_9 dl=18000 exec=0
+[CBS][tick=16320][budget_current] budget=180
+[CBS TEST] [CBS_1] job=3 START=16300 END=16321 trigger=16300
+[EDF][tick=16326][release] task=PERIODIC_10 new_dl=19316
+[EDF][tick=16451][finish] task=PERIODIC_10 dl=19316 exec=0
+[EDF][tick=16456][release] task=PERIODIC_11 new_dl=19447
+[EDF][tick=16581][finish] task=PERIODIC_11 dl=19447 exec=0
+[EDF][tick=16586][release] task=PERIODIC_12 new_dl=19585
+[EDF][tick=16711][finish] task=PERIODIC_12 dl=19585 exec=0
+[CBS][tick=16736][budget_current] budget=180
+[CBS TEST] [CBS_2] job=3 START=16716 END=16737 trigger=16716
+[EDF][tick=16742][release] task=PERIODIC_13 new_dl=19716
+[EDF][tick=16867][finish] task=PERIODIC_13 dl=19716 exec=0
+[CBS][tick=16892][budget_current] budget=180
+[CBS TEST] [CBS_3] job=2 START=16872 END=16893 trigger=16872
+[EDF][tick=18000][release] task=PERIODIC_0 new_dl=21000
+[EDF][tick=18125][finish] task=PERIODIC_0 dl=21000 exec=0
+[EDF][tick=18130][release] task=PERIODIC_1 new_dl=21000
+[EDF][tick=18255][finish] task=PERIODIC_1 dl=21000 exec=0
+[EDF][tick=18260][release] task=PERIODIC_2 new_dl=21000
+[EDF][tick=18385][finish] task=PERIODIC_2 dl=21000 exec=0
+[EDF][tick=18390][release] task=PERIODIC_3 new_dl=21000
+[EDF][tick=18515][finish] task=PERIODIC_3 dl=21000 exec=0
+[EDF][tick=18520][release] task=PERIODIC_4 new_dl=21000
+[EDF][tick=18645][finish] task=PERIODIC_4 dl=21000 exec=0
+[EDF][tick=18650][release] task=PERIODIC_5 new_dl=21000
+[EDF][tick=18775][finish] task=PERIODIC_5 dl=21000 exec=0
+[EDF][tick=18780][release] task=PERIODIC_6 new_dl=21000
+[EDF][tick=18905][finish] task=PERIODIC_6 dl=21000 exec=0
+[EDF][tick=18910][release] task=PERIODIC_7 new_dl=21000
+[EDF][tick=19035][finish] task=PERIODIC_7 dl=21000 exec=0
+[EDF][tick=19040][release] task=PERIODIC_8 new_dl=21000
+[EDF][tick=19165][finish] task=PERIODIC_8 dl=21000 exec=0
+[EDF][tick=19170][release] task=PERIODIC_9 new_dl=21000
+[EDF][tick=19295][finish] task=PERIODIC_9 dl=21000 exec=0
+[CBS][tick=19320][budget_current] budget=180
+[CBS TEST] [CBS_0] job=4 START=19300 END=19321 trigger=19300
+[EDF][tick=19326][release] task=PERIODIC_10 new_dl=22316
+[EDF][tick=19451][finish] task=PERIODIC_10 dl=22316 exec=0
+[EDF][tick=19456][release] task=PERIODIC_11 new_dl=22447
+[EDF][tick=19581][finish] task=PERIODIC_11 dl=22447 exec=0
+[EDF][tick=19586][release] task=PERIODIC_12 new_dl=22585
+[EDF][tick=19711][finish] task=PERIODIC_12 dl=22585 exec=0
+[CBS][tick=19736][budget_current] budget=180
+[CBS TEST] [CBS_1] job=4 START=19716 END=19737 trigger=19716
+[EDF][tick=19742][release] task=PERIODIC_13 new_dl=22716
+[EDF][tick=19867][finish] task=PERIODIC_13 dl=22716 exec=0
+[CBS][tick=19892][budget_current] budget=180
+[CBS TEST] [CBS_2] job=4 START=19872 END=19893 trigger=19872
+[EDF][tick=21000][release] task=PERIODIC_0 new_dl=24000
+[EDF][tick=21125][finish] task=PERIODIC_0 dl=24000 exec=0
+[EDF][tick=21130][release] task=PERIODIC_1 new_dl=24000
+[EDF][tick=21255][finish] task=PERIODIC_1 dl=24000 exec=0
+[EDF][tick=21260][release] task=PERIODIC_2 new_dl=24000
+[EDF][tick=21385][finish] task=PERIODIC_2 dl=24000 exec=0
+[EDF][tick=21390][release] task=PERIODIC_3 new_dl=24000
+[EDF][tick=21515][finish] task=PERIODIC_3 dl=24000 exec=0
+[EDF][tick=21520][release] task=PERIODIC_4 new_dl=24000
+[EDF][tick=21645][finish] task=PERIODIC_4 dl=24000 exec=0
+[EDF][tick=21650][release] task=PERIODIC_5 new_dl=24000
+[EDF][tick=21775][finish] task=PERIODIC_5 dl=24000 exec=0
+[EDF][tick=21780][release] task=PERIODIC_6 new_dl=24000
+[EDF][tick=21905][finish] task=PERIODIC_6 dl=24000 exec=0
+[EDF][tick=21910][release] task=PERIODIC_7 new_dl=24000
+[EDF][tick=22035][finish] task=PERIODIC_7 dl=24000 exec=0
+[EDF][tick=22040][release] task=PERIODIC_8 new_dl=24000
+[EDF][tick=22165][finish] task=PERIODIC_8 dl=24000 exec=0
+[EDF][tick=22170][release] task=PERIODIC_9 new_dl=24000
+[EDF][tick=22295][finish] task=PERIODIC_9 dl=24000 exec=0
+[CBS][tick=22320][budget_current] budget=180
+[CBS TEST] [CBS_3] job=3 START=22300 END=22321 trigger=22300
+[EDF][tick=22326][release] task=PERIODIC_10 new_dl=25316
+[EDF][tick=22451][finish] task=PERIODIC_10 dl=25316 exec=0
+[EDF][tick=22456][release] task=PERIODIC_11 new_dl=25447
+[EDF][tick=22581][finish] task=PERIODIC_11 dl=25447 exec=0
+[EDF][tick=22586][release] task=PERIODIC_12 new_dl=25585
+[EDF][tick=22711][finish] task=PERIODIC_12 dl=25585 exec=0
+[CBS][tick=22736][budget_current] budget=180
+[CBS TEST] [CBS_0] job=5 START=22716 END=22737 trigger=22716
+[EDF][tick=22742][release] task=PERIODIC_13 new_dl=25716
+[EDF][tick=22867][finish] task=PERIODIC_13 dl=25716 exec=0
+[CBS][tick=22892][budget_current] budget=180
+[CBS TEST] [CBS_1] job=5 START=22872 END=22893 trigger=22872
+[EDF][tick=24000][release] task=PERIODIC_0 new_dl=27000
+[EDF][tick=24125][finish] task=PERIODIC_0 dl=27000 exec=0
+[EDF][tick=24130][release] task=PERIODIC_1 new_dl=27000
+[EDF][tick=24255][finish] task=PERIODIC_1 dl=27000 exec=0
+[EDF][tick=24260][release] task=PERIODIC_2 new_dl=27000
+[EDF][tick=24385][finish] task=PERIODIC_2 dl=27000 exec=0
+[EDF][tick=24390][release] task=PERIODIC_3 new_dl=27000
+[EDF][tick=24515][finish] task=PERIODIC_3 dl=27000 exec=0
+[EDF][tick=24520][release] task=PERIODIC_4 new_dl=27000
+[EDF][tick=24645][finish] task=PERIODIC_4 dl=27000 exec=0
+[EDF][tick=24650][release] task=PERIODIC_5 new_dl=27000
+[EDF][tick=24775][finish] task=PERIODIC_5 dl=27000 exec=0
+[EDF][tick=24780][release] task=PERIODIC_6 new_dl=27000
+[EDF][tick=24905][finish] task=PERIODIC_6 dl=27000 exec=0
+[EDF][tick=24910][release] task=PERIODIC_7 new_dl=27000
+[EDF][tick=25035][finish] task=PERIODIC_7 dl=27000 exec=0
+[EDF][tick=25040][release] task=PERIODIC_8 new_dl=27000
+[EDF][tick=25165][finish] task=PERIODIC_8 dl=27000 exec=0
+[EDF][tick=25170][release] task=PERIODIC_9 new_dl=27000
+[EDF][tick=25295][finish] task=PERIODIC_9 dl=27000 exec=0
+[CBS][tick=25320][budget_current] budget=180
+[CBS TEST] [CBS_2] job=5 START=25300 END=25321 trigger=25300
+[EDF][tick=25326][release] task=PERIODIC_10 new_dl=28316
+[EDF][tick=25451][finish] task=PERIODIC_10 dl=28316 exec=0
+[EDF][tick=25456][release] task=PERIODIC_11 new_dl=28447
+[EDF][tick=25581][finish] task=PERIODIC_11 dl=28447 exec=0
+[EDF][tick=25586][release] task=PERIODIC_12 new_dl=28585
+[EDF][tick=25711][finish] task=PERIODIC_12 dl=28585 exec=0
+[CBS][tick=25736][budget_current] budget=180
+[CBS TEST] [CBS_3] job=4 START=25716 END=25737 trigger=25716
+[EDF][tick=25742][release] task=PERIODIC_13 new_dl=28716
+[EDF][tick=25867][finish] task=PERIODIC_13 dl=28716 exec=0
+[CBS][tick=25892][budget_current] budget=180
+[CBS TEST] [CBS_0] job=6 START=25872 END=25893 trigger=25872
+[EDF][tick=27000][release] task=PERIODIC_0 new_dl=30000
+[EDF][tick=27125][finish] task=PERIODIC_0 dl=30000 exec=0
+[EDF][tick=27130][release] task=PERIODIC_1 new_dl=30000
+[EDF][tick=27255][finish] task=PERIODIC_1 dl=30000 exec=0
+[EDF][tick=27260][release] task=PERIODIC_2 new_dl=30000
+[EDF][tick=27385][finish] task=PERIODIC_2 dl=30000 exec=0
+[EDF][tick=27390][release] task=PERIODIC_3 new_dl=30000
+[EDF][tick=27515][finish] task=PERIODIC_3 dl=30000 exec=0
+[EDF][tick=27520][release] task=PERIODIC_4 new_dl=30000
+[EDF][tick=27645][finish] task=PERIODIC_4 dl=30000 exec=0
+[EDF][tick=27650][release] task=PERIODIC_5 new_dl=30000
+[EDF][tick=27775][finish] task=PERIODIC_5 dl=30000 exec=0
+[EDF][tick=27780][release] task=PERIODIC_6 new_dl=30000
+[EDF][tick=27905][finish] task=PERIODIC_6 dl=30000 exec=0
+[EDF][tick=27910][release] task=PERIODIC_7 new_dl=30000
+[EDF][tick=28035][finish] task=PERIODIC_7 dl=30000 exec=0
+[EDF][tick=28040][release] task=PERIODIC_8 new_dl=30000
+[EDF][tick=28165][finish] task=PERIODIC_8 dl=30000 exec=0
+[EDF][tick=28170][release] task=PERIODIC_9 new_dl=30000
+[EDF][tick=28295][finish] task=PERIODIC_9 dl=30000 exec=0
+[CBS][tick=28320][budget_current] budget=180
+[CBS TEST] [CBS_1] job=6 START=28300 END=28321 trigger=28300
+[EDF][tick=28326][release] task=PERIODIC_10 new_dl=31316
+[EDF][tick=28451][finish] task=PERIODIC_10 dl=31316 exec=0
+[EDF][tick=28456][release] task=PERIODIC_11 new_dl=31447
+[EDF][tick=28581][finish] task=PERIODIC_11 dl=31447 exec=0
+[EDF][tick=28586][release] task=PERIODIC_12 new_dl=31585
+[EDF][tick=28711][finish] task=PERIODIC_12 dl=31585 exec=0
+[CBS][tick=28736][budget_current] budget=180
+[CBS TEST] [CBS_2] job=6 START=28716 END=28737 trigger=28716
+[EDF][tick=28742][release] task=PERIODIC_13 new_dl=31716
+[EDF][tick=28867][finish] task=PERIODIC_13 dl=31716 exec=0
+[CBS][tick=28892][budget_current] budget=180
+[CBS TEST] [CBS_3] job=5 START=28872 END=28893 trigger=28872
+[EDF][tick=30000][release] task=PERIODIC_0 new_dl=33000
+[EDF][tick=30125][finish] task=PERIODIC_0 dl=33000 exec=0
+[EDF][tick=30130][release] task=PERIODIC_1 new_dl=33000
+[EDF][tick=30255][finish] task=PERIODIC_1 dl=33000 exec=0
+[EDF][tick=30260][release] task=PERIODIC_2 new_dl=33000
+[EDF][tick=30385][finish] task=PERIODIC_2 dl=33000 exec=0
+[EDF][tick=30390][release] task=PERIODIC_3 new_dl=33000
+[EDF][tick=30515][finish] task=PERIODIC_3 dl=33000 exec=0
+[EDF][tick=30520][release] task=PERIODIC_4 new_dl=33000
+[EDF][tick=30645][finish] task=PERIODIC_4 dl=33000 exec=0
+[EDF][tick=30650][release] task=PERIODIC_5 new_dl=33000
+[EDF][tick=30775][finish] task=PERIODIC_5 dl=33000 exec=0
+[EDF][tick=30780][release] task=PERIODIC_6 new_dl=33000
+[EDF][tick=30905][finish] task=PERIODIC_6 dl=33000 exec=0
+[EDF][tick=30910][release] task=PERIODIC_7 new_dl=33000
+[EDF][tick=31035][finish] task=PERIODIC_7 dl=33000 exec=0
+[EDF][tick=31040][release] task=PERIODIC_8 new_dl=33000
+[EDF][tick=31165][finish] task=PERIODIC_8 dl=33000 exec=0
+[EDF][tick=31170][release] task=PERIODIC_9 new_dl=33000
+[EDF][tick=31295][finish] task=PERIODIC_9 dl=33000 exec=0
+[CBS][tick=31320][budget_current] budget=180
+[CBS TEST] [CBS_0] job=7 START=31300 END=31321 trigger=31300
+[EDF][tick=31326][release] task=PERIODIC_10 new_dl=34316
+[EDF][tick=31451][finish] task=PERIODIC_10 dl=34316 exec=0
+[EDF][tick=31456][release] task=PERIODIC_11 new_dl=34447
+[EDF][tick=31581][finish] task=PERIODIC_11 dl=34447 exec=0
+[EDF][tick=31586][release] task=PERIODIC_12 new_dl=34585
+[EDF][tick=31711][finish] task=PERIODIC_12 dl=34585 exec=0
+[CBS][tick=31736][budget_current] budget=180
+[CBS TEST] [CBS_1] job=7 START=31716 END=31737 trigger=31716
+[EDF][tick=31742][release] task=PERIODIC_13 new_dl=34716
+[EDF][tick=31867][finish] task=PERIODIC_13 dl=34716 exec=0
+[CBS][tick=31892][budget_current] budget=180
+[CBS TEST] [CBS_2] job=7 START=31872 END=31893 trigger=31872
+[EDF][tick=33000][release] task=PERIODIC_0 new_dl=36000
+[EDF][tick=33125][finish] task=PERIODIC_0 dl=36000 exec=0
+[EDF][tick=33130][release] task=PERIODIC_1 new_dl=36000
+[EDF][tick=33255][finish] task=PERIODIC_1 dl=36000 exec=0
+[EDF][tick=33260][release] task=PERIODIC_2 new_dl=36000
+[EDF][tick=33385][finish] task=PERIODIC_2 dl=36000 exec=0
+[EDF][tick=33390][release] task=PERIODIC_3 new_dl=36000
+[EDF][tick=33515][finish] task=PERIODIC_3 dl=36000 exec=0
+[EDF][tick=33520][release] task=PERIODIC_4 new_dl=36000
+[EDF][tick=33645][finish] task=PERIODIC_4 dl=36000 exec=0
+[EDF][tick=33650][release] task=PERIODIC_5 new_dl=36000
+[EDF][tick=33775][finish] task=PERIODIC_5 dl=36000 exec=0
+[EDF][tick=33780][release] task=PERIODIC_6 new_dl=36000
+[EDF][tick=33905][finish] task=PERIODIC_6 dl=36000 exec=0
+[EDF][tick=33910][release] task=PERIODIC_7 new_dl=36000
+[EDF][tick=34035][finish] task=PERIODIC_7 dl=36000 exec=0
+[EDF][tick=34040][release] task=PERIODIC_8 new_dl=36000
+[EDF][tick=34165][finish] task=PERIODIC_8 dl=36000 exec=0
+[EDF][tick=34170][release] task=PERIODIC_9 new_dl=36000
+[EDF][tick=34295][finish] task=PERIODIC_9 dl=36000 exec=0
+[CBS][tick=34320][budget_current] budget=180
+[CBS TEST] [CBS_3] job=6 START=34300 END=34321 trigger=34300
+[EDF][tick=34326][release] task=PERIODIC_10 new_dl=37316
+[EDF][tick=34451][finish] task=PERIODIC_10 dl=37316 exec=0
+[EDF][tick=34456][release] task=PERIODIC_11 new_dl=37447
+[EDF][tick=34581][finish] task=PERIODIC_11 dl=37447 exec=0
+[EDF][tick=34586][release] task=PERIODIC_12 new_dl=37585
+[EDF][tick=34711][finish] task=PERIODIC_12 dl=37585 exec=0
+[CBS][tick=34736][budget_current] budget=180
+[CBS TEST] [CBS_0] job=8 START=34716 END=34737 trigger=34716
+[EDF][tick=34742][release] task=PERIODIC_13 new_dl=37716
+[EDF][tick=34867][finish] task=PERIODIC_13 dl=37716 exec=0
+[CBS][tick=34892][budget_current] budget=180
+[CBS TEST] [CBS_1] job=8 START=34872 END=34893 trigger=34872
+[EDF][tick=36000][release] task=PERIODIC_0 new_dl=39000
+[EDF][tick=36125][finish] task=PERIODIC_0 dl=39000 exec=0
+[EDF][tick=36130][release] task=PERIODIC_1 new_dl=39000
+[EDF][tick=36255][finish] task=PERIODIC_1 dl=39000 exec=0
+[EDF][tick=36260][release] task=PERIODIC_2 new_dl=39000
+[EDF][tick=36385][finish] task=PERIODIC_2 dl=39000 exec=0
+[EDF][tick=36390][release] task=PERIODIC_3 new_dl=39000

@@ -1,0 +1,205 @@
+FreeRTOS on core 0:
+[SMP][PARTITION][fit] creating U={0.40,0.30,0.30,0.25,0.25} then U=0.80 reject candidate
+[EDF][tick=0][admission] task=P_U40 C=400 T=1000 D=1000 result=ACCEPT reason=partitioned fit
+[EDF][tick=0][task-add] task=P_U40 mode=pre-start-pending
+[EDF][tick=0][admission] task=P_U30A C=300 T=1000 D=1000 result=ACCEPT reason=partitioned fit
+[EDF][tick=0][task-add] task=P_U30A mode=pre-start-pending
+[EDF][tick=0][admission] task=P_U30B C=300 T=1000 D=1000 result=ACCEPT reason=partitioned fit
+[EDF][tick=0][task-add] task=P_U30B mode=pre-start-pending
+[EDF][tick=0][admission] task=P_U25A C=250 T=1000 D=1000 result=ACCEPT reason=partitioned fit
+[EDF][tick=0][task-add] task=P_U25A mode=pre-start-pending
+[EDF][tick=0][admission] task=P_U25B C=250 T=1000 D=1000 result=ACCEPT reason=partitioned fit
+[EDF][tick=0][task-add] task=P_U25B mode=pre-start-pending
+[EDF][tick=0][admission] task=P_U80_REJECT C=800 T=1000 D=1000 result=REJECT reason=partitioned no fit
+[SMP][PARTITION][fit] results={1,1,1,1,1} reject=0 admitted=5 rejected=1
+[EDF][tick=0][partition-bind] task=P_U40 core=1 Uu=400000 mode=pre-start
+[EDF][tick=0][partition-bind] task=P_U30A core=1 Uu=300000 mode=pre-start
+[EDF][tick=0][partition-bind] task=P_U30B core=1 Uu=300000 mode=pre-start
+[EDF][tick=0][partition-bind] task=P_U25A core=1 Uu=250000 mode=pre-start
+[EDF][tick=0][partition-bind] task=P_U25B core=1 Uu=250000 mode=pre-start
+[EDF][tick=60][finish] task=P_U40 dl=1000 exec=0
+[EDF][tick=124][finish] task=P_U30A dl=1000 exec=0
+[EDF][tick=188][finish] task=P_U30B dl=1000 exec=0
+[EDF][tick=252][finish] task=P_U25A dl=1000 exec=0
+[EDF][tick=316][finish] task=P_U25B dl=1000 exec=0
+[EDF][tick=1000][release] task=P_U40 new_dl=2000
+[EDF][tick=1064][finish] task=P_U40 dl=2000 exec=0
+[EDF][tick=1068][release] task=P_U30A new_dl=2000
+[EDF][tick=1133][finish] task=P_U30A dl=2000 exec=0
+[EDF][tick=1137][release] task=P_U30B new_dl=2000
+[EDF][tick=1202][finish] task=P_U30B dl=2000 exec=0
+[EDF][tick=1206][release] task=P_U25A new_dl=2000
+[EDF][tick=1271][finish] task=P_U25A dl=2000 exec=0
+[EDF][tick=1275][release] task=P_U25B new_dl=2000
+[EDF][tick=1340][finish] task=P_U25B dl=2000 exec=0
+[EDF][tick=2000][release] task=P_U40 new_dl=3000
+[EDF][tick=2064][finish] task=P_U40 dl=3000 exec=0
+[EDF][tick=2068][release] task=P_U30A new_dl=3000
+[EDF][tick=2133][finish] task=P_U30A dl=3000 exec=0
+[EDF][tick=2137][release] task=P_U30B new_dl=3000
+[EDF][tick=2202][finish] task=P_U30B dl=3000 exec=0
+[EDF][tick=2206][release] task=P_U25A new_dl=3000
+[EDF][tick=2271][finish] task=P_U25A dl=3000 exec=0
+[EDF][tick=2275][release] task=P_U25B new_dl=3000
+[EDF][tick=2340][finish] task=P_U25B dl=3000 exec=0
+[EDF][tick=3000][release] task=P_U40 new_dl=4000
+[EDF][tick=3064][finish] task=P_U40 dl=4000 exec=0
+[EDF][tick=3068][release] task=P_U30A new_dl=4000
+[EDF][tick=3133][finish] task=P_U30A dl=4000 exec=0
+[EDF][tick=3137][release] task=P_U30B new_dl=4000
+[EDF][tick=3202][finish] task=P_U30B dl=4000 exec=0
+[EDF][tick=3206][release] task=P_U25A new_dl=4000
+[EDF][tick=3271][finish] task=P_U25A dl=4000 exec=0
+[EDF][tick=3275][release] task=P_U25B new_dl=4000
+[EDF][tick=3340][finish] task=P_U25B dl=4000 exec=0
+[EDF][tick=4000][release] task=P_U40 new_dl=5000
+[EDF][tick=4064][finish] task=P_U40 dl=5000 exec=0
+[EDF][tick=4068][release] task=P_U30A new_dl=5000
+[EDF][tick=4133][finish] task=P_U30A dl=5000 exec=0
+[EDF][tick=4137][release] task=P_U30B new_dl=5000
+[EDF][tick=4202][finish] task=P_U30B dl=5000 exec=0
+[EDF][tick=4206][release] task=P_U25A new_dl=5000
+[EDF][tick=4271][finish] task=P_U25A dl=5000 exec=0
+[EDF][tick=4275][release] task=P_U25B new_dl=5000
+[EDF][tick=4340][finish] task=P_U25B dl=5000 exec=0
+[EDF][tick=5000][release] task=P_U40 new_dl=6000
+[EDF][tick=5064][finish] task=P_U40 dl=6000 exec=0
+[EDF][tick=5068][release] task=P_U30A new_dl=6000
+[EDF][tick=5133][finish] task=P_U30A dl=6000 exec=0
+[EDF][tick=5137][release] task=P_U30B new_dl=6000
+[EDF][tick=5202][finish] task=P_U30B dl=6000 exec=0
+[EDF][tick=5206][release] task=P_U25A new_dl=6000
+[EDF][tick=5271][finish] task=P_U25A dl=6000 exec=0
+[EDF][tick=5275][release] task=P_U25B new_dl=6000
+[EDF][tick=5340][finish] task=P_U25B dl=6000 exec=0
+[EDF][tick=6000][release] task=P_U40 new_dl=7000
+[EDF][tick=6064][finish] task=P_U40 dl=7000 exec=0
+[EDF][tick=6068][release] task=P_U30A new_dl=7000
+[EDF][tick=6133][finish] task=P_U30A dl=7000 exec=0
+[EDF][tick=6137][release] task=P_U30B new_dl=7000
+[EDF][tick=6202][finish] task=P_U30B dl=7000 exec=0
+[EDF][tick=6206][release] task=P_U25A new_dl=7000
+[EDF][tick=6271][finish] task=P_U25A dl=7000 exec=0
+[EDF][tick=6275][release] task=P_U25B new_dl=7000
+[EDF][tick=6340][finish] task=P_U25B dl=7000 exec=0
+[EDF][tick=7000][release] task=P_U40 new_dl=8000
+[EDF][tick=7064][finish] task=P_U40 dl=8000 exec=0
+[EDF][tick=7068][release] task=P_U30A new_dl=8000
+[EDF][tick=7133][finish] task=P_U30A dl=8000 exec=0
+[EDF][tick=7137][release] task=P_U30B new_dl=8000
+[EDF][tick=7202][finish] task=P_U30B dl=8000 exec=0
+[EDF][tick=7206][release] task=P_U25A new_dl=8000
+[EDF][tick=7271][finish] task=P_U25A dl=8000 exec=0
+[EDF][tick=7275][release] task=P_U25B new_dl=8000
+[EDF][tick=7340][finish] task=P_U25B dl=8000 exec=0
+[EDF][tick=8000][release] task=P_U40 new_dl=9000
+[EDF][tick=8064][finish] task=P_U40 dl=9000 exec=0
+[EDF][tick=8068][release] task=P_U30A new_dl=9000
+[EDF][tick=8133][finish] task=P_U30A dl=9000 exec=0
+[EDF][tick=8137][release] task=P_U30B new_dl=9000
+[EDF][tick=8202][finish] task=P_U30B dl=9000 exec=0
+[EDF][tick=8206][release] task=P_U25A new_dl=9000
+[EDF][tick=8271][finish] task=P_U25A dl=9000 exec=0
+[EDF][tick=8275][release] task=P_U25B new_dl=9000
+[EDF][tick=8340][finish] task=P_U25B dl=9000 exec=0
+[EDF][tick=9000][release] task=P_U40 new_dl=10000
+[EDF][tick=9064][finish] task=P_U40 dl=10000 exec=0
+[EDF][tick=9068][release] task=P_U30A new_dl=10000
+[EDF][tick=9133][finish] task=P_U30A dl=10000 exec=0
+[EDF][tick=9137][release] task=P_U30B new_dl=10000
+[EDF][tick=9202][finish] task=P_U30B dl=10000 exec=0
+[EDF][tick=9206][release] task=P_U25A new_dl=10000
+[EDF][tick=9271][finish] task=P_U25A dl=10000 exec=0
+[EDF][tick=9275][release] task=P_U25B new_dl=10000
+[EDF][tick=9340][finish] task=P_U25B dl=10000 exec=0
+[EDF][tick=10000][release] task=P_U40 new_dl=11000
+[EDF][tick=10064][finish] task=P_U40 dl=11000 exec=0
+[EDF][tick=10068][release] task=P_U30A new_dl=11000
+[EDF][tick=10133][finish] task=P_U30A dl=11000 exec=0
+[EDF][tick=10137][release] task=P_U30B new_dl=11000
+[EDF][tick=10202][finish] task=P_U30B dl=11000 exec=0
+[EDF][tick=10206][release] task=P_U25A new_dl=11000
+[EDF][tick=10271][finish] task=P_U25A dl=11000 exec=0
+[EDF][tick=10275][release] task=P_U25B new_dl=11000
+[EDF][tick=10340][finish] task=P_U25B dl=11000 exec=0
+[EDF][tick=11000][release] task=P_U40 new_dl=12000
+[EDF][tick=11064][finish] task=P_U40 dl=12000 exec=0
+[EDF][tick=11068][release] task=P_U30A new_dl=12000
+[EDF][tick=11133][finish] task=P_U30A dl=12000 exec=0
+[EDF][tick=11137][release] task=P_U30B new_dl=12000
+[EDF][tick=11202][finish] task=P_U30B dl=12000 exec=0
+[EDF][tick=11206][release] task=P_U25A new_dl=12000
+[EDF][tick=11271][finish] task=P_U25A dl=12000 exec=0
+[EDF][tick=11275][release] task=P_U25B new_dl=12000
+[EDF][tick=11340][finish] task=P_U25B dl=12000 exec=0
+[EDF][tick=12000][release] task=P_U40 new_dl=13000
+[EDF][tick=12064][finish] task=P_U40 dl=13000 exec=0
+[EDF][tick=12068][release] task=P_U30A new_dl=13000
+[EDF][tick=12133][finish] task=P_U30A dl=13000 exec=0
+[EDF][tick=12137][release] task=P_U30B new_dl=13000
+[EDF][tick=12202][finish] task=P_U30B dl=13000 exec=0
+[EDF][tick=12206][release] task=P_U25A new_dl=13000
+[EDF][tick=12271][finish] task=P_U25A dl=13000 exec=0
+[EDF][tick=12275][release] task=P_U25B new_dl=13000
+[EDF][tick=12340][finish] task=P_U25B dl=13000 exec=0
+[EDF][tick=13000][release] task=P_U40 new_dl=14000
+[EDF][tick=13064][finish] task=P_U40 dl=14000 exec=0
+[EDF][tick=13068][release] task=P_U30A new_dl=14000
+[EDF][tick=13133][finish] task=P_U30A dl=14000 exec=0
+[EDF][tick=13137][release] task=P_U30B new_dl=14000
+[EDF][tick=13202][finish] task=P_U30B dl=14000 exec=0
+[EDF][tick=13206][release] task=P_U25A new_dl=14000
+[EDF][tick=13271][finish] task=P_U25A dl=14000 exec=0
+[EDF][tick=13275][release] task=P_U25B new_dl=14000
+[EDF][tick=13340][finish] task=P_U25B dl=14000 exec=0
+[EDF][tick=14000][release] task=P_U40 new_dl=15000
+[EDF][tick=14064][finish] task=P_U40 dl=15000 exec=0
+[EDF][tick=14068][release] task=P_U30A new_dl=15000
+[EDF][tick=14133][finish] task=P_U30A dl=15000 exec=0
+[EDF][tick=14137][release] task=P_U30B new_dl=15000
+[EDF][tick=14202][finish] task=P_U30B dl=15000 exec=0
+[EDF][tick=14206][release] task=P_U25A new_dl=15000
+[EDF][tick=14271][finish] task=P_U25A dl=15000 exec=0
+[EDF][tick=14275][release] task=P_U25B new_dl=15000
+[EDF][tick=14340][finish] task=P_U25B dl=15000 exec=0
+[EDF][tick=15000][release] task=P_U40 new_dl=16000
+[EDF][tick=15064][finish] task=P_U40 dl=16000 exec=0
+[EDF][tick=15068][release] task=P_U30A new_dl=16000
+[EDF][tick=15133][finish] task=P_U30A dl=16000 exec=0
+[EDF][tick=15137][release] task=P_U30B new_dl=16000
+[EDF][tick=15202][finish] task=P_U30B dl=16000 exec=0
+[EDF][tick=15206][release] task=P_U25A new_dl=16000
+[EDF][tick=15271][finish] task=P_U25A dl=16000 exec=0
+[EDF][tick=15275][release] task=P_U25B new_dl=16000
+[EDF][tick=15340][finish] task=P_U25B dl=16000 exec=0
+[EDF][tick=16000][release] task=P_U40 new_dl=17000
+[EDF][tick=16064][finish] task=P_U40 dl=17000 exec=0
+[EDF][tick=16068][release] task=P_U30A new_dl=17000
+[EDF][tick=16133][finish] task=P_U30A dl=17000 exec=0
+[EDF][tick=16137][release] task=P_U30B new_dl=17000
+[EDF][tick=16202][finish] task=P_U30B dl=17000 exec=0
+[EDF][tick=16206][release] task=P_U25A new_dl=17000
+[EDF][tick=16271][finish] task=P_U25A dl=17000 exec=0
+[EDF][tick=16275][release] task=P_U25B new_dl=17000
+[EDF][tick=16340][finish] task=P_U25B dl=17000 exec=0
+[EDF][tick=17000][release] task=P_U40 new_dl=18000
+[EDF][tick=17064][finish] task=P_U40 dl=18000 exec=0
+[EDF][tick=17068][release] task=P_U30A new_dl=18000
+[EDF][tick=17133][finish] task=P_U30A dl=18000 exec=0
+[EDF][tick=17137][release] task=P_U30B new_dl=18000
+[EDF][tick=17202][finish] task=P_U30B dl=18000 exec=0
+[EDF][tick=17206][release] task=P_U25A new_dl=18000
+[EDF][tick=17271][finish] task=P_U25A dl=18000 exec=0
+[EDF][tick=17275][release] task=P_U25B new_dl=18000
+[EDF][tick=17340][finish] task=P_U25B dl=18000 exec=0
+[EDF][tick=18000][release] task=P_U40 new_dl=19000
+[EDF][tick=18064][finish] task=P_U40 dl=19000 exec=0
+[EDF][tick=18068][release] task=P_U30A new_dl=19000
+[EDF][tick=18133][finish] task=P_U30A dl=19000 exec=0
+[EDF][tick=18137][release] task=P_U30B new_dl=19000
+[EDF][tick=18202][finish] task=P_U30B dl=19000 exec=0
+[EDF][tick=18206][release] task=P_U25A new_dl=19000
+[EDF][tick=18271][finish] task=P_U25A dl=19000 exec=0
+[EDF][tick=18275][release] task=P_U25B new_dl=19000
+[EDF][tick=18340][finish] task=P_U25B dl=19000 exec=0
+
