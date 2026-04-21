@@ -235,23 +235,53 @@ static void vMonitorTask( void * pvParameters )
     }
 
     printf( "\r\n" );
-    printf( " --- STACK MEMORY COMPARISON (100 tasks, 20 per group) ---\r\n" );
+    printf( " --- PROJECTED SAVINGS AT 100 TASKS (20 per group) ---\r\n" );
     {
-        unsigned long uxNoShareBytes = 100UL * SRP100_STACK_WORDS * 4UL;
-        unsigned long uxShareBytes   = ( unsigned long ) SRP100_GROUPS * SRP100_STACK_WORDS * 4UL;
-        unsigned long uxSaved        = uxNoShareBytes - uxShareBytes;
-        unsigned long uxPct          = ( uxSaved * 100UL ) / uxNoShareBytes;
+        unsigned long uxBssBytes = ( unsigned long ) ( SRP100_GROUPS * SRP100_STACK_WORDS * 4 );
 
-        printf( "   Without sharing : 100 x %d bytes = %lu bytes of stack\r\n",
-                SRP100_STACK_WORDS * 4, uxNoShareBytes );
-        printf( "   With sharing    :   %d x %d bytes = %lu bytes of stack (.bss)\r\n",
-                SRP100_GROUPS, SRP100_STACK_WORDS * 4, uxShareBytes );
-        printf( "   Stack memory saved by sharing: %lu bytes  (%lu%%)\r\n",
+#if ( configSRP_STACK_SHARING == 0 )
+        /* Mode OFF: we measured the real no-sharing heap cost.
+         * Project the sharing cost as the 5 static buffers only (.bss). */
+        unsigned long uxNoShareActual  = ( unsigned long ) xHeapConsumed;
+        unsigned long uxShareProjected = uxBssBytes;
+        unsigned long uxSaved          = ( uxNoShareActual > uxShareProjected )
+                                         ? ( uxNoShareActual - uxShareProjected ) : 0UL;
+        unsigned long uxPct            = ( uxNoShareActual > 0UL )
+                                         ? ( uxSaved * 100UL / uxNoShareActual ) : 0UL;
+
+        printf( "   Without sharing (measured, %d tasks)  : %lu bytes on heap"
+                "  (~%lu bytes/task)\r\n",
+                iTasksCreated,
+                uxNoShareActual,
+                ( unsigned long ) xPerTaskHeap );
+        printf( "   With sharing    (projected, %d buffers): %lu bytes .bss stack"
+                "  (%d x %d bytes)\r\n",
+                SRP100_GROUPS, uxShareProjected,
+                SRP100_GROUPS, SRP100_STACK_WORDS * 4 );
+        printf( "   Memory saved by sharing               : %lu bytes  (%lu%%)\r\n",
                 uxSaved, uxPct );
-#if ( configSRP_STACK_SHARING == 1 )
-        printf( "   (This run used TRUE runtime sharing: all 100 tasks on 5 buffers)\r\n" );
 #else
-        printf( "   (This run used separate heap stacks for comparison)\r\n" );
+        /* Mode ON: we measured the real sharing heap cost (TCBs + snapshots).
+         * Add the known .bss cost for the 5 static buffers.
+         * Project the no-sharing cost as 100 x stack_bytes (theoretical). */
+        unsigned long uxShareActual    = ( unsigned long ) xHeapConsumed + uxBssBytes;
+        unsigned long uxNoShareProject = ( unsigned long ) ( SRP100_NUM_TASKS_OFF * SRP100_STACK_WORDS * 4 );
+        unsigned long uxSaved          = ( uxNoShareProject > uxShareActual )
+                                         ? ( uxNoShareProject - uxShareActual ) : 0UL;
+        unsigned long uxPct            = ( uxNoShareProject > 0UL )
+                                         ? ( uxSaved * 100UL / uxNoShareProject ) : 0UL;
+
+        printf( "   Without sharing (projected, 100 tasks): %lu bytes of heap stack"
+                "  (100 x %d bytes)\r\n",
+                uxNoShareProject, SRP100_STACK_WORDS * 4 );
+        printf( "   With sharing    (measured,  %d tasks)  : %lu bytes heap"
+                " + %lu bytes .bss = %lu bytes total\r\n",
+                iTasksCreated,
+                ( unsigned long ) xHeapConsumed,
+                uxBssBytes,
+                uxShareActual );
+        printf( "   Memory saved by sharing               : %lu bytes  (%lu%%)\r\n",
+                uxSaved, uxPct );
 #endif
     }
 

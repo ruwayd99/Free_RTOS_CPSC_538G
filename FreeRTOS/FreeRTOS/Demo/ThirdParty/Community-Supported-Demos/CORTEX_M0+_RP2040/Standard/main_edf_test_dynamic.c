@@ -31,7 +31,7 @@
 #define PIN_CONS1    21
 #define PIN_CONS2    20
 #define PIN_CONS3    19
-#define PIN_CONS4    18
+#define PIN_IMPL5    18
 
 /* Parameter bundle passed via pvParameters to the generic periodic worker. */
 typedef struct
@@ -48,7 +48,7 @@ static DynWorkParams_t xImpl4Params;
 static DynWorkParams_t xCons1Params;
 static DynWorkParams_t xCons2Params;
 static DynWorkParams_t xCons3Params;
-static DynWorkParams_t xCons4Params;
+static DynWorkParams_t xImpl5Params;
 
 /* Busy wait to burn CPU for deterministic traces on the logic analyzer. */
 static void prvBusyWorkTicks( TickType_t xDurationTicks )
@@ -115,7 +115,7 @@ static void vOrchestratorTask( void * pvParameters )
     vTaskDelay( pdMS_TO_TICKS( 8000 ) );
 
     /* Add two runtime EDF tasks, one is REJECTED and the other should be ACCEPTED. ---- */
-    printf( "[DYN][orch] phase 2: adding IMPL4 and CONS4 at runtime\r\n" );
+    printf( "[DYN][orch] phase 2: adding IMPL4 and IMPL5 at runtime\r\n" );
 
         /* ---- Phase 2: attempt an OVERLOAD task that must be REJECTED. ----
      * U = 900/1000 = 0.9 which alone pushes sum(C/T) above 1. The admission
@@ -133,17 +133,17 @@ static void vOrchestratorTask( void * pvParameters )
                               NULL );
     prvLogCounters( "runtime IMPL4 OVERLOAD", xResult );
 
-    xCons4Params.iPin = PIN_CONS4;
-    xCons4Params.xWcetTicks = pdMS_TO_TICKS( 250 );
+    xImpl5Params.iPin = PIN_IMPL5;
+    xImpl5Params.xWcetTicks = pdMS_TO_TICKS( 250 );
     xResult = xTaskCreateEDF( vPeriodicWorker,
-                              "CONS4_LATE_OK",
+                              "IMPL5_LATE_OK",
                               256,
-                              &xCons4Params,
+                              &xImpl5Params,
                               pdMS_TO_TICKS( 10000 ),   /* T */
                               pdMS_TO_TICKS( 10000 ),   /* D < T (constrained) */
                               pdMS_TO_TICKS( 150 ),    /* C */
                               NULL );
-    prvLogCounters( "runtime IMPL4 Late OK", xResult );
+    prvLogCounters( "runtime IMPL5 Late OK", xResult );
 
     /* Orchestrator has nothing left to do - keep it parked. */
     for( ;; )
@@ -166,7 +166,7 @@ void main_edf_test( void )
     const int piMainPins[ 8 ] =
     {
         PIN_IMPL1, PIN_IMPL2, PIN_IMPL3, PIN_IMPL4,
-        PIN_CONS1, PIN_CONS2, PIN_CONS3, PIN_CONS4
+        PIN_CONS1, PIN_CONS2, PIN_CONS3, PIN_IMPL5
     };
     for( int i = 0; i < 8; i++ )
     {
