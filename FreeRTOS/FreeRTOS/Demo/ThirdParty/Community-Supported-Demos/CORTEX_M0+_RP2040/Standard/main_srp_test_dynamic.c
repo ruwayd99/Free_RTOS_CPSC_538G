@@ -50,9 +50,9 @@
 #define PIN_T1   10
 #define PIN_T2   11
 #define PIN_T3   12
-#define PIN_T4   13
-#define PIN_T5   21
-#define PIN_T6   23   /* OVERLOAD task pin -- stays LOW because admission rejects it */
+#define PIN_T4   21
+#define PIN_T5   20
+#define PIN_T6   19   /* OVERLOAD task pin -- stays LOW because admission rejects it */
 
 /* ---- Resources (created in main_edf_test) ----------------------------- */
 static SRPResourceHandle_t xR1 = NULL;   /* 4 units */
