@@ -21,7 +21,7 @@
 #define CBS_PERIOD_MS       1000
 #define CBS_BUDGET_MS       200
 
-#define APPROX_CBS_TRIGGER_PERIOD_MS    200
+#define APPROX_CBS_TRIGGER_PERIOD_MS    30
 #define CBS_WCET_MS                     20
 
 static TaskHandle_t xCBSTriggerHandle = NULL;
@@ -83,20 +83,6 @@ static void vPeriodicTask(void *pvParameters)
 
     TickType_t xLastWake = xTaskGetTickCount();
 
-    if( xHasPin != pdFALSE )
-    {
-        printf("[CBS TEST] [PERIODIC_%d] pin=%u started at tick %lu\n",
-               idx,
-               pin,
-               (unsigned long)xTaskGetTickCount());
-    }
-    else
-    {
-        printf("[CBS TEST] [PERIODIC_%d] pin=none started at tick %lu\n",
-               idx,
-               (unsigned long)xTaskGetTickCount());
-    }
-
     for (;;)
     {
         if( xHasPin != pdFALSE )
@@ -127,10 +113,10 @@ static void vCBSAperiodicTask(void *pvParameters)
         gpio_set_dir( pin, GPIO_OUT );
     }
 
-    printf("[CBS TEST] [CBS_%d] pin=%u started at tick %lu\n",
-           idx,
-           pin,
-           (unsigned long)xTaskGetTickCount());
+    // printf("[CBS TEST] [CBS_%d] pin=%u started at tick %lu\n",
+    //        idx,
+    //        pin,
+    //        (unsigned long)xTaskGetTickCount());
 
     for (;;)
     {
@@ -181,9 +167,9 @@ static void vCBSTriggerTask(void *pvParameters)
                 xLastCBSTriggerTick[ ulTargetIndex ] = xTaskGetTickCount();
                 xTaskNotifyGive( xTargetHandle );
 
-                printf( "[CBS TEST] [CBS_trigger] tick %lu notifying CBS_%lu\n",
-                        ( unsigned long ) xLastCBSTriggerTick[ ulTargetIndex ],
-                        ( unsigned long ) ulTargetIndex );
+                // printf( "[CBS TEST] [CBS_trigger] tick %lu notifying CBS_%lu\n",
+                //         ( unsigned long ) xLastCBSTriggerTick[ ulTargetIndex ],
+                //         ( unsigned long ) ulTargetIndex );
             }
         }
     }
@@ -217,10 +203,10 @@ static void vPeriodicTriggerTask(void *pvParameters)
                                      pdMS_TO_TICKS(PERIODIC_WCET_MS),
                                      &xPeriodicTaskHandles[idx]) == pdPASS );
 
-        printf("[CBS TEST] [PERIODIC_DISPATCH] created %s on pin=%u at tick %lu\n",
-               name,
-               pin,
-               (unsigned long)xTaskGetTickCount());
+        // printf("[CBS TEST] [PERIODIC_DISPATCH] created %s on pin=%u at tick %lu\n",
+        //        name,
+        //        pin,
+        //        (unsigned long)xTaskGetTickCount());
 
         if( i < NUM_CBS_TASKS_SUBSEQUENT )
         {
@@ -237,10 +223,10 @@ static void vPeriodicTriggerTask(void *pvParameters)
                           pdMS_TO_TICKS( CBS_PERIOD_MS ),
                           &xCBSTaskHandles[ cbsIdx ] ) == pdPASS );
 
-            printf( "[CBS TEST] [CBS_DISPATCH] created %s on pin=%u at tick %lu\n",
-                cbsName,
-                PIN_CBS_BASE + ( uint ) cbsIdx,
-                ( unsigned long ) xTaskGetTickCount() );
+            // printf( "[CBS TEST] [CBS_DISPATCH] created %s on pin=%u at tick %lu\n",
+            //     cbsName,
+            //     PIN_CBS_BASE + ( uint ) cbsIdx,
+            //     ( unsigned long ) xTaskGetTickCount() );
         }
     }
 
