@@ -272,9 +272,9 @@ Note we did not add the projected heap usage for with stack sharing (which is wh
 
 ### 3.7 Result
 
-**PASS** in both modes. Mode OFF: 100 admits, 0 rejects, ~97 KB heap
-consumed for stacks. Mode ON: 100 admits, 0 rejects, ~1 KB heap +
-3.8 KB `.bss`, ~95% savings depending on how you account for the
+**PASS** in both modes. Mode OFF: 100 admits, 0 rejects, ~96 KB heap
+consumed for stacks. Mode ON: 100 admits, 0 rejects, ~28 KB heap +
+3.8 KB `.bss`, ~66% savings depending on how you account for the
 snapshot buffers.
 
 ---
