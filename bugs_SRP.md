@@ -50,7 +50,7 @@ rogue caller that takes a resource without registering will bypass the
 Every shared-stack task allocates a private snapshot
 (`pxPrivateContextSnapshot`) from `pvPortMalloc`. For Cortex-M0+ the
 initial frame is ~20 words = 80 bytes, so 100 tasks waste ~8 KB of
-heap. The net savings vs. full per-task stacks are still large (~95%
+heap. The net savings vs. full per-task stacks are still large (~66%
 in the 100-task demo), but we're paying a small "sharing tax" that a
 smarter implementation would avoid.
 
