@@ -714,15 +714,21 @@ PRIVILEGED_DATA static List_t xPendingReadyList;                         /**< Ta
         TickType_t xCriticalSectionTicks;
     } SRPUserRegistration_t;
 
+    typedef struct xSRPHolderRecord
+    {
+        TaskHandle_t xHolder;
+        UBaseType_t  uxUnitsHeld;
+        UBaseType_t  uxHolderLevel;
+    } SRPHolderRecord_t;
+
     typedef struct xSRPResourceControl
     {
-        BaseType_t xInUse;
-        UBaseType_t uxTotalUnits;
-        UBaseType_t uxAvailableUnits;
-        UBaseType_t uxCurrentHolderLevel;
-        UBaseType_t uxCurrentHolderUnits;
-        TaskHandle_t xCurrentHolder;
-        UBaseType_t uxUserCount;
+        BaseType_t    xInUse;
+        UBaseType_t   uxTotalUnits;
+        UBaseType_t   uxAvailableUnits;
+        UBaseType_t   uxHolderCount;
+        SRPHolderRecord_t xHolders[ configMAX_SRP_USERS_PER_RESOURCE ];
+        UBaseType_t   uxUserCount;
         SRPUserRegistration_t xUsers[ configMAX_SRP_USERS_PER_RESOURCE ];
     } SRPResourceControl_t;
 
@@ -8018,14 +8024,20 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         {
             SRPResourceControl_t * pxRes = &( xSRPResources[ uxResourceIndex ] );
 
-            if( ( pxRes->xInUse != pdFALSE ) &&
-                ( pxRes->xCurrentHolder == ( TaskHandle_t ) pxTCB ) &&
-                ( pxRes->uxCurrentHolderUnits > 0U ) )
+            if( pxRes->xInUse != pdFALSE )
             {
-                pxRes->uxAvailableUnits += pxRes->uxCurrentHolderUnits;
-                pxRes->uxCurrentHolderUnits = 0U;
-                pxRes->xCurrentHolder = NULL;
-                pxRes->uxCurrentHolderLevel = 0U;
+                UBaseType_t uxHolderIdx;
+
+                for( uxHolderIdx = 0U; uxHolderIdx < pxRes->uxHolderCount; uxHolderIdx++ )
+                {
+                    if( pxRes->xHolders[ uxHolderIdx ].xHolder == ( TaskHandle_t ) pxTCB )
+                    {
+                        pxRes->uxAvailableUnits += pxRes->xHolders[ uxHolderIdx ].uxUnitsHeld;
+                        pxRes->xHolders[ uxHolderIdx ] = pxRes->xHolders[ pxRes->uxHolderCount - 1U ];
+                        pxRes->uxHolderCount--;
+                        break;
+                    }
+                }
             }
         }
 
@@ -8074,7 +8086,11 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
             return pdTRUE;
         }
 
-        if( ( pxTCB == pxCurrentTCB ) && ( pxTCB->uxSRPHeldResources > 0U ) )
+        /* Any task that already holds at least one resource passed the SRP
+         * gate before entering its critical section.  Allow it to resume
+         * regardless of the current ceiling — the ceiling was raised partly
+         * by this task's own hold and must not prevent it from continuing. */
+        if( pxTCB->uxSRPHeldResources > 0U )
         {
             return pdTRUE;
         }
@@ -8201,30 +8217,25 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
                 continue;
             }
 
-            /* Determine the holder's preemption level so we can skip it.
-             * Under SRP, the holder should never block itself — counting
-             * its own registration as "blocked" would raise the ceiling
-             * to the holder's own level, preventing it from acquiring
-             * any other resource (level > sysceil check fails when
-             * level == sysceil). */
-            UBaseType_t uxHolderLevel = 0U;
-            BaseType_t  xHasHolder = pdFALSE;
-
-            if( pxRes->xCurrentHolder != NULL )
-            {
-                uxHolderLevel = pxRes->uxCurrentHolderLevel;
-                xHasHolder = pdTRUE;
-            }
-
+            /* Skip users that currently hold this resource: they already
+             * passed the SRP gate and must not raise the ceiling against
+             * themselves.  With multi-holder support, check ALL holders. */
             for( uxUserIndex = 0U; uxUserIndex < pxRes->uxUserCount; uxUserIndex++ )
             {
                 const SRPUserRegistration_t * pxUser = &( pxRes->xUsers[ uxUserIndex ] );
+                UBaseType_t uxHolderIdx;
+                BaseType_t  xIsHolder = pdFALSE;
 
-                /* Skip registrations at the holder's preemption level.
-                 * The holder already owns units and should not be
-                 * considered "blocked" on the resource it holds. */
-                if( ( xHasHolder == pdTRUE ) &&
-                    ( pxUser->uxPreemptionLevel == uxHolderLevel ) )
+                for( uxHolderIdx = 0U; uxHolderIdx < pxRes->uxHolderCount; uxHolderIdx++ )
+                {
+                    if( pxRes->xHolders[ uxHolderIdx ].uxHolderLevel == pxUser->uxPreemptionLevel )
+                    {
+                        xIsHolder = pdTRUE;
+                        break;
+                    }
+                }
+
+                if( xIsHolder != pdFALSE )
                 {
                     continue;
                 }
@@ -8407,48 +8418,69 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         taskENTER_CRITICAL();
         {
             TCB_t * pxTask = pxCurrentTCB;
+            UBaseType_t uxHolderIdx;
+            BaseType_t  xAlreadyHolder = pdFALSE;
 
-            /* Defensive consistency repair: stale holder/unit metadata can
-             * permanently block all future takes if a holder context is lost.
-             * Keep resource accounting coherent before applying SRP gate checks. */
+            /* Defensive: remove stale holder entries whose task was dropped
+             * mid-CS (uxSRPHeldResources == 0 means the task no longer holds
+             * anything, so its slot here is stale). */
+            for( uxHolderIdx = 0U; uxHolderIdx < pxRes->uxHolderCount; )
+            {
+                TCB_t * pxHolderTCB = ( TCB_t * ) pxRes->xHolders[ uxHolderIdx ].xHolder;
+
+                if( ( pxHolderTCB == NULL ) || ( pxHolderTCB->uxSRPHeldResources == 0U ) )
+                {
+                    pxRes->uxAvailableUnits += pxRes->xHolders[ uxHolderIdx ].uxUnitsHeld;
+                    pxRes->xHolders[ uxHolderIdx ] = pxRes->xHolders[ pxRes->uxHolderCount - 1U ];
+                    pxRes->uxHolderCount--;
+                }
+                else
+                {
+                    uxHolderIdx++;
+                }
+            }
+
             if( pxRes->uxAvailableUnits > pxRes->uxTotalUnits )
             {
                 pxRes->uxAvailableUnits = pxRes->uxTotalUnits;
             }
 
-            if( pxRes->uxCurrentHolderUnits == 0U )
+            /* Check whether the current task already holds this resource
+             * (re-entry).  If so, it bypasses the SRP gate — it already
+             * passed the gate when it first took units. */
+            for( uxHolderIdx = 0U; uxHolderIdx < pxRes->uxHolderCount; uxHolderIdx++ )
             {
-                pxRes->xCurrentHolder = NULL;
-                pxRes->uxCurrentHolderLevel = 0U;
-            }
-
-            if( pxRes->xCurrentHolder == NULL )
-            {
-                pxRes->uxCurrentHolderUnits = 0U;
-            }
-            else
-            {
-                TCB_t * pxHolder = ( TCB_t * ) pxRes->xCurrentHolder;
-
-                if( pxHolder->uxSRPHeldResources == 0U )
+                if( pxRes->xHolders[ uxHolderIdx ].xHolder == ( TaskHandle_t ) pxTask )
                 {
-                    pxRes->xCurrentHolder = NULL;
-                    pxRes->uxCurrentHolderLevel = 0U;
-                    pxRes->uxCurrentHolderUnits = 0U;
-                    pxRes->uxAvailableUnits = pxRes->uxTotalUnits;
+                    xAlreadyHolder = pdTRUE;
+                    break;
                 }
             }
 
             if( ( uxUnits <= pxRes->uxAvailableUnits ) &&
-                ( ( pxTask->uxPreemptionLevel > uxSystemCeiling ) ||
-                  ( pxRes->xCurrentHolder == ( TaskHandle_t ) pxTask ) ) )
+                ( ( xAlreadyHolder != pdFALSE ) ||
+                  ( pxTask->uxPreemptionLevel > uxSystemCeiling ) ) )
             {
                 pxRes->uxAvailableUnits -= uxUnits;
-                pxRes->xCurrentHolder = ( TaskHandle_t ) pxTask;
-                pxRes->uxCurrentHolderLevel = pxTask->uxPreemptionLevel;
-                pxRes->uxCurrentHolderUnits += uxUnits;
-                pxTask->uxSRPHeldResources++;
 
+                if( xAlreadyHolder != pdFALSE )
+                {
+                    /* Re-entry: accumulate units in the existing holder record. */
+                    pxRes->xHolders[ uxHolderIdx ].uxUnitsHeld += uxUnits;
+                }
+                else
+                {
+                    /* New holder: add an entry to the holders array. */
+                    if( pxRes->uxHolderCount < configMAX_SRP_USERS_PER_RESOURCE )
+                    {
+                        pxRes->xHolders[ pxRes->uxHolderCount ].xHolder      = ( TaskHandle_t ) pxTask;
+                        pxRes->xHolders[ pxRes->uxHolderCount ].uxUnitsHeld  = uxUnits;
+                        pxRes->xHolders[ pxRes->uxHolderCount ].uxHolderLevel = pxTask->uxPreemptionLevel;
+                        pxRes->uxHolderCount++;
+                    }
+                }
+
+                pxTask->uxSRPHeldResources++;
                 ( void ) prvSRPRecalculateSystemCeiling();
                 srpTRACE( "[SRP] TAKE task=%s res=%p units=%lu avail=%lu sysceil=%lu\r\n",
                           pxTask->pcTaskName,
@@ -8477,11 +8509,21 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
         taskENTER_CRITICAL();
         {
             TCB_t * pxTask = pxCurrentTCB;
+            UBaseType_t uxHolderIdx;
 
-            if( ( pxRes->xCurrentHolder == ( TaskHandle_t ) pxTask ) &&
-                ( uxUnits <= pxRes->uxCurrentHolderUnits ) )
+            /* Find this task's holder record. */
+            for( uxHolderIdx = 0U; uxHolderIdx < pxRes->uxHolderCount; uxHolderIdx++ )
             {
-                pxRes->uxCurrentHolderUnits -= uxUnits;
+                if( pxRes->xHolders[ uxHolderIdx ].xHolder == ( TaskHandle_t ) pxTask )
+                {
+                    break;
+                }
+            }
+
+            if( ( uxHolderIdx < pxRes->uxHolderCount ) &&
+                ( uxUnits <= pxRes->xHolders[ uxHolderIdx ].uxUnitsHeld ) )
+            {
+                pxRes->xHolders[ uxHolderIdx ].uxUnitsHeld -= uxUnits;
                 pxRes->uxAvailableUnits += uxUnits;
 
                 if( pxTask->uxSRPHeldResources > 0U )
@@ -8489,10 +8531,11 @@ static void prvEDFDropLateJob( TCB_t * pxTCB, TickType_t xNow )
                     pxTask->uxSRPHeldResources--;
                 }
 
-                if( pxRes->uxCurrentHolderUnits == 0U )
+                if( pxRes->xHolders[ uxHolderIdx ].uxUnitsHeld == 0U )
                 {
-                    pxRes->xCurrentHolder = NULL;
-                    pxRes->uxCurrentHolderLevel = 0U;
+                    /* Fully released: compact the holders array. */
+                    pxRes->xHolders[ uxHolderIdx ] = pxRes->xHolders[ pxRes->uxHolderCount - 1U ];
+                    pxRes->uxHolderCount--;
                 }
 
                 ( void ) prvSRPRecalculateSystemCeiling();

@@ -6,25 +6,17 @@ stack-sharing implementation.
 
 ## 1. Functional bugs
 
-### 1.1 Single-holder model breaks when two tasks hold overlapping units of the same resource
+### ~~1.1 Single-holder model breaks when two tasks hold overlapping units of the same resource~~ — FIXED
 
-`SRPResourceControl_t` tracks exactly one `xCurrentHolder`. That is
-fine for binary locks and even for multi-unit resources held by a
-single task (with or without re-entry). But if SRP ever lets **two
-different tasks** hold non-overlapping units of the same resource at
-the same time (legal under classic multi-unit SRP when both requests
-can be satisfied), the second take overwrites `xCurrentHolder` and the
-first holder's identity is lost.
-
-**Why this hasn't exploded.** The SRP gate + admission-time `B_i`
-usually prevents two tasks from concurrently holding units unless
-there are "enough" to satisfy both. The dynamic test works around it
-by deliberately routing the runtime `RT_OK` task to `R3` instead of
-`R1` so it can't hold R1 concurrently with `NESTED`. The comment in
-[`main_srp_test_dynamic.c`](FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/Standard/main_srp_test_dynamic.c) says this explicitly.
-
-**Fix.** Promote `xCurrentHolder` to a `holders[configMAX_SRP_USERS_PER_RESOURCE]` vector
-and iterate on unit accounting.
+**Fixed.** `SRPResourceControl_t` now tracks a `xHolders[configMAX_SRP_USERS_PER_RESOURCE]`
+array of `SRPHolderRecord_t` entries (`{xHolder, uxUnitsHeld, uxHolderLevel}`) plus
+`uxHolderCount`. `xSRPResourceTake` adds a new entry per task or accumulates into an
+existing one (re-entry). `vSRPResourceGive` decrements and removes the entry when
+`uxUnitsHeld` reaches zero (compacts by swapping with the last entry). All release
+paths (Give, drop-late-job, task delete) scan the array rather than comparing against
+one handle. `prvSRPCanTaskRun` was also fixed to allow any task with
+`uxSRPHeldResources > 0` to resume — not just `pxCurrentTCB` — so a task preempted
+mid-CS by a higher-level task can correctly resume when the preemptor finishes.
 
 ### 1.2 Admission `B_i` is over-approximate for multi-unit resources
 

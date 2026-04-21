@@ -60,20 +60,9 @@ would make the code safely portable. See `bugs_SRP.md §2.2`.
 
 ---
 
-## 3. Scheduler integration
+## 3. Testing and tooling
 
-### 3.1 Multi-holder vectors in `SRPResourceControl_t`
-
-`xCurrentHolder` is a single handle. Promoting it to
-`holders[configMAX_SRP_USERS_PER_RESOURCE]` with per-holder unit
-counts closes `bugs_SRP.md §1.1` and makes multi-holder scenarios
-safe.
-
----
-
-## 4. Testing and tooling
-
-### 4.1 Chaos tests for the stack-sharing guard
+### 3.1 Chaos tests for the stack-sharing guard
 
 Randomly generate task sets where same-level tasks get preempted by
 higher-level ones at unpredictable times, then verify every task
@@ -81,14 +70,14 @@ completes its run without corruption. This is the only way to
 exercise the `prvSharedBufferHasMidExecutionTask` guard in its full
 state space.
 
-### 4.2 `main_srp_test_dynamic` should verify drop-late under SRP
+### 3.2 `main_srp_test_dynamic` should verify drop-late under SRP
 
 The current demo only exercises normal-load admission. Add a phase
 where NESTED is deliberately overrun (inject extra busy work) so
 `[EDF][drop]` fires while SRP units are held. Verify ceiling returns
 to 0 and the next NESTED period starts normally.
 
-### 4.3 Automated HWM diff between Mode OFF and Mode ON
+### 3.3 Automated HWM diff between Mode OFF and Mode ON
 
 The 100-task monitor prints a single report per run. A scripted
 diff with Mode OFF report vs. Mode ON report would make the savings

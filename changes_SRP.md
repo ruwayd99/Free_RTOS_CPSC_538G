@@ -19,7 +19,7 @@ toggled independently.
 
 | Symbol | Purpose |
 |---|---|
-| `xSRPResources[ configMAX_SRP_RESOURCES ]` | Fixed-size resource registry. Each slot holds total/available units, the current holder (if any), the current holder's preemption level, and up to `configMAX_SRP_USERS_PER_RESOURCE` user registrations. |
+| `xSRPResources[ configMAX_SRP_RESOURCES ]` | Fixed-size resource registry. Each slot holds total/available units, a compact array of active holders, and up to `configMAX_SRP_USERS_PER_RESOURCE` user registrations. |
 | `uxSystemCeiling` | Live system ceiling `Π(t)`. Recomputed on every take/give and on drop-late-job cleanup. |
 
 **New structure types**
@@ -27,7 +27,8 @@ toggled independently.
 | Type | Role |
 |---|---|
 | `SRPUserRegistration_t` | Per-user record: `uxPreemptionLevel`, `uxUnitsNeeded`, `xCriticalSectionTicks`. Populated at `vSRPResourceRegisterUser` time and consulted when computing a resource ceiling. |
-| `SRPResourceControl_t` | Multi-unit resource: `uxTotalUnits`, `uxAvailableUnits`, the single current holder (task + level + units), plus the `xUsers[]` table. |
+| `SRPHolderRecord_t` | Per-active-holder entry inside a resource: `{xHolder, uxUnitsHeld, uxHolderLevel}`. Enables multiple distinct tasks to hold non-overlapping units of the same resource concurrently without losing any task's accounting. |
+| `SRPResourceControl_t` | Multi-unit resource: `uxTotalUnits`, `uxAvailableUnits`, a `xHolders[configMAX_SRP_USERS_PER_RESOURCE]` array of `SRPHolderRecord_t` entries, `uxHolderCount`, plus the `xUsers[]` table. |
 
 **New TCB_t fields**
 
@@ -51,7 +52,7 @@ toggled independently.
 | `prvSRPRecalculateSystemCeiling` | Scans every resource; for each one, computes `ceiling(r) = max π_i among users whose uxUnitsNeeded > uxAvailableUnits`. Takes the max across all resources into `uxSystemCeiling`. |
 | `prvSRPComputeResourceCeilingIfTaken` | Hypothetical ceiling if a candidate took its units, used to compute `B_i` at admission. |
 | `prvSRPComputeBlockingBoundForLevel` | For a candidate preemption level `π`, scans every user of every resource and returns the maximum critical-section length belonging to a *lower-level* user (`π_user < π`) whose resource ceiling (if that user took its units) would be `≥ π`. That is the classic SRP `B_i` formula. |
-| `prvSRPCanTaskRun` | Implements the SRP gate: allow if `π_i > uxSystemCeiling`, or if the task is the current resource holder (re-entry), or if the task has a live hold. |
+| `prvSRPCanTaskRun` | Implements the SRP gate: allow if `π_i > uxSystemCeiling`, or if `uxSRPHeldResources > 0` (task already passed the gate — includes both the currently-executing task and any task that was preempted mid-CS and must resume). |
 | `prvSRPCalculateTaskPreemptionLevel` | `π_i = portMAX_DELAY - D_i`. |
 | *(Stack sharing)* `prvSharedBufferHasMidExecutionTask` | Walks `xEDFReadyList` + `pxCurrentTCB` for any TCB that uses the same shared-stack buffer, is at the same preemption level, and has `xSharedStackFreshStart == pdFALSE`. Used by the selector to avoid overwriting a peer's live context. |
 
@@ -61,8 +62,8 @@ toggled independently.
 |---|---|
 | `xSRPResourceCreate(uxMaxUnits)` | Reserves a free slot in `xSRPResources`, sets `uxTotalUnits == uxAvailableUnits = uxMaxUnits`, returns opaque handle. |
 | `vSRPResourceRegisterUser(h, uxLevel, uxUnits, xCSTicks)` | Appends a user record to the resource. Must be called before any task that will take the resource is created, because admission reads the registered CS lengths to compute `B_i`. |
-| `xSRPResourceTake(h, uxUnits)` | Takes `uxUnits` atomically under `taskENTER_CRITICAL`. Asserts availability (admission guarantees it). Updates holder, decrements `uxAvailableUnits`, recomputes `uxSystemCeiling`, emits `[SRP][TAKE]` trace. Re-entry by the current holder is allowed. |
-| `vSRPResourceGive(h, uxUnits)` | Releases `uxUnits`, updates holder on full release, recomputes `uxSystemCeiling`, emits `[SRP][GIVE]` trace. |
+| `xSRPResourceTake(h, uxUnits)` | Takes `uxUnits` atomically under `taskENTER_CRITICAL`. Asserts availability. Scans `xHolders[]` for the calling task: if found, accumulates units (re-entry); otherwise appends a new `SRPHolderRecord_t`. Decrements `uxAvailableUnits`, increments `uxSRPHeldResources`, recomputes `uxSystemCeiling`, emits `[SRP][TAKE]` trace. |
+| `vSRPResourceGive(h, uxUnits)` | Finds the calling task's entry in `xHolders[]`, decrements `uxUnitsHeld` by the released amount, decrements `uxAvailableUnits` inverse, decrements `uxSRPHeldResources`. Removes the entry (compact by swap-with-last) when `uxUnitsHeld` reaches zero. Recomputes `uxSystemCeiling`, emits `[SRP][GIVE]` trace. |
 | `uxSRPGetSystemCeiling()` | Read the current live ceiling (used by demos). |
 
 **Modified existing functions**

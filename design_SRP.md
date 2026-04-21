@@ -76,12 +76,27 @@ tasks can never overlap.
 
 ### 3.3 Holder tracking
 
-Each resource tracks `xCurrentHolder`, `uxCurrentHolderLevel`, and
-`uxCurrentHolderUnits`. Re-entrant acquisition by the current holder
-always succeeds (even when unit availability would otherwise fail)
-because the holder is already past the SRP gate. This is what lets
-`T1 NESTED` in `main_srp_test_dynamic.c` do `Take R1(2) → Take R2(1) →
-Take R1(1)`: the third take is a re-entry.
+Each resource keeps a compact array of `SRPHolderRecord_t` entries
+(`{xHolder, uxUnitsHeld, uxHolderLevel}`) and a count `uxHolderCount`.
+Multiple tasks can hold non-overlapping units of the same resource
+simultaneously — each gets its own slot.
+
+`xSRPResourceTake` first scans the array for the calling task:
+
+* **Found (re-entry):** the task already passed the gate; accumulate the
+  new units into the existing entry's `uxUnitsHeld`, bypass the gate check.
+* **Not found (new take):** the calling task must pass the SRP gate
+  (`π > uxSystemCeiling`); if it does, append a new entry.
+
+`vSRPResourceGive` finds the calling task's entry, decrements
+`uxUnitsHeld` by the released amount, and removes the entry (compact by
+swapping with the last slot) when `uxUnitsHeld` reaches zero.
+
+This is what lets `T1 NESTED` in `main_srp_test_dynamic.c` do
+`Take R1(2) → Take R2(1) → Take R1(1 re-entry)`: the third take finds
+T1 already in the R1 holders array and simply accumulates. It also lets
+two distinct tasks hold disjoint units of the same multi-unit resource at
+the same time without corrupting each other's accounting.
 
 ---
 
@@ -164,8 +179,10 @@ return NULL          // fall through to priority-based selection
 `prvSRPCanTaskRun` is:
 
 * `pdTRUE`  if `π > uxSystemCeiling`
-* `pdTRUE`  if the task is the holder of a resource (it already passed
-   the gate once)
+* `pdTRUE`  if `uxSRPHeldResources > 0` — the task holds at least one
+   unit and already passed the gate; it may be the currently-executing
+   task or a task that was preempted mid-CS by a higher-level preemptor
+   and must now resume.
 * `pdFALSE` otherwise, and we emit `[SRP][BLOCK]` so the trace shows
    which task was gated and why.
 
@@ -339,8 +356,10 @@ For 100 tasks × 192-word stacks in 5 groups:
                                    |
                                    v
               uxAvailableUnits -= n
-              holder := currentTask; holderLevel := π_curr;
-              holderUnits += n        (re-entry friendly)
+              scan xHolders[] for calling task:
+                found  -> accumulate uxUnitsHeld += n  (re-entry)
+                missing -> append new SRPHolderRecord_t entry
+              pxTask->uxSRPHeldResources++
                                    |
                                    v
               prvSRPRecalculateSystemCeiling()
