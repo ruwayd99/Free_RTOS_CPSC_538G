@@ -78,7 +78,7 @@ ullUtil += ((uint64_t) (C + B) * 1000000UL) / T;   /* per task */
 accept if ullUtil <= 1000000UL
 ```
 
-No floating-point in kernel; no overflow for any realistic `T ≤ 2^20`.
+No floating-point in kernel.
 The `B` term is the SRP blocking bound (always zero in pure Task 1).
 
 ### 3.2 Constrained-deadline path (exact DBF)
@@ -101,8 +101,7 @@ Three design decisions matter here:
    pairings of periods can make the sweep blow past a minute on an M0+.
 2. **Loop start = min(D_i)** across every admitted task and the
    candidate. For `t < min D_i` no task has yet had a deadline, so the
-   demand is zero; starting at `t = 1` caused spurious rejections when
-   `B > 1`.
+   demand is zero.
 3. **Max blocking `B_max` is added at each `t`**. This is the classic
    SRP extension of the Baruah DBF test. With Task 1 alone, all `B`
    values are zero and the term vanishes.
