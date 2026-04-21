@@ -164,9 +164,15 @@ add_single_test_bin(main_srp_test_dynamic
         mainCREATE_EDF_TEST=1
         ${SRP_COMMON_DEFS})
 
-# SRP 100-task stack-sharing quantitative test (professor README requirement)
+# SRP 100-task quantitative test (professor README requirement)
 add_single_test_bin(main_srp_test_100
         mainCREATE_EDF_TEST=1
+        ${SRP_COMMON_DEFS})
+
+# SRP 100-task stack-sharing quantitative test (professor README requirement)
+add_single_test_bin(main_srp_test_100_sharing
+        mainCREATE_EDF_TEST=1
+        configSRP_STACK_SHARING=1
         ${SRP_COMMON_DEFS})
 
 ###############################################################################################
