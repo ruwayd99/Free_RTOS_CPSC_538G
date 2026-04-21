@@ -34,6 +34,11 @@ The first three tasks are admitted and continue to run periodically. The final t
 - `uxTaskGetEDFRejectedCount()` increments for the rejection case.
 - The admitted tasks keep producing periodic GPIO activity without kernel instability.
 
+**Results (from `test_results/run_smp_global_admission.log`):**
+- The log shows `G_A`, `G_B`, and `G_C` admitted, and `G_REJECT` rejected by global GFB admission.
+- The startup summary reports `admitted=3 rejected=1`.
+- Admitted tasks continue to release and finish periodically for the remainder of the captured output.
+
 ---
 
 ### Test 2: Global migration and remove-from-core flow
@@ -55,6 +60,11 @@ The migration request should succeed and the hinted task should become eligible 
 - The controller prints a successful migration result.
 - The worker trace eventually shows `G_HINT` on core 1.
 - The remove-from-core operation completes without a crash.
+
+**Results (from `test_results/run_smp_global_migration.log`):**
+- The controller logs `migrate hinted->core1 result=1`, then worker output later confirms `G_HINT` running on core 1.
+- The controller logs removal of `G_PEER` from scheduling.
+- After removal, only `G_HINT` continues periodic releases/finishes, with no crash observed.
 
 ## 3. Partitioned EDF Tests
 
@@ -80,6 +90,11 @@ The five moderate tasks are admitted and placed across the two cores. The oversi
 - One task is rejected.
 - The summary print shows 5 admitted and 1 rejected.
 
+**Results (from `test_results/run_smp_partition_fit.log`):**
+- The log shows five accepts (`P_U40`, `P_U30A`, `P_U30B`, `P_U25A`, `P_U25B`) and one reject (`P_U80_REJECT`).
+- The printed summary confirms `admitted=5 rejected=1`.
+- Accepted tasks continue periodic release/finish behavior in the captured run.
+
 ---
 
 ### Test 4: Partitioned migration and capacity release
@@ -101,6 +116,11 @@ The first migration should fail because core 0 is already carrying a large task.
 - The first migration request returns failure.
 - The controller reports that `P_A_U70` was removed from core assignment.
 - The second migration request returns success.
+
+**Results (from `test_results/run_smp_partition_migrate.log`):**
+- The first migration attempt logs failure as expected: `migrate B->core0 expect fail result=0`.
+- The controller then logs removal of `P_A_U70` from core assignment.
+- The second migration logs success: `migrate B->core0 after remove expect pass result=1`, and worker output then shows `P_B_U40` running on core 0.
 
 ## 4. Coverage Summary
 
