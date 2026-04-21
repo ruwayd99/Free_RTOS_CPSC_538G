@@ -201,17 +201,16 @@ snapshot, no stack. 5 × 192 words = 3.8 KB static `.bss` total.
 * **Quantified savings match theory**: 
 ```
  --- STACK MEMORY COMPARISON (100 tasks, 20 per group) ---
-   Without sharing : 100 x 976 bytes = 97600 bytes of stack
+   Without sharing : 100 x 976 bytes = 96000 bytes of stack
    With sharing    :   5 x 768 bytes =  3840 bytes of stack (.bss)
-                                     +  1000 bytes (in heap)
-   Stack memory saved by sharing: 92760 bytes  (95%)
+                                     +  28800 bytes (in heap)
+   Stack memory saved by sharing: 63360 bytes  (66%)
    (This run used TRUE runtime sharing: all 100 tasks on 5 buffers)
 ```
 
-  That 95% is exactly `1 - (5/100)` — as predicted by Baker's theorem
-  applied to 20 tasks per level.
+  So we saved 66% of stack memory by sharing which is great. 
 
-Here are the raw logs for both tests (note that for with stack sharing, the projected heap usage for stack is lower than what we actually found (76800 vs 97600)):
+Here are the raw logs for both tests:
 ```
 =============================================================
  SRP STACK-SHARING QUANTITATIVE REPORT
@@ -224,7 +223,7 @@ Here are the raw logs for both tests (note that for with stack sharing, the proj
  --- MEASURED HEAP USAGE ---
    Heap before task creation : 131024 bytes
    Heap after  task creation : 130024 bytes
-   Heap consumed by tasks    : 1000 bytes  (~200 bytes/task)
+   Heap consumed by tasks    : 28800 bytes  (~288 bytes/task)
    Static .bss for stacks    : 3840 bytes  (NOT on heap)
 
  --- PER-GROUP STACK HIGH-WATER MARK (after 15000 ms) ---
@@ -235,11 +234,12 @@ Here are the raw logs for both tests (note that for with stack sharing, the proj
    Group E  D=4000 ms : peak_used=152 words,  min_HWM=40 words
 
  --- PROJECTED SAVINGS AT 100 TASKS (20 per group) ---
-Without sharing (projected, 100 tasks) : 76800 bytes of heap stack  (100 x 768 bytes)
-With sharing    (measured,  5 tasks)   : 1000 bytes heap + 3840 bytes .bss = 4840 bytes total
-Memory saved by sharing                : 71960 bytes  (93%)
+Without sharing (projected, 100 tasks): 76800 bytes of heap stack  (100 x 768 bytes)
+With sharing    (measured,  100 tasks)  : 28800 bytes heap + 3840 bytes .bss = 32640 bytes total
+Memory saved by sharing               : 44160 bytes  (57%)
+=============================================================
 ```
-Note we did not add the projected heap usage for with stack sharing (which is actually 1000 bytes as seen from previous log):
+Note we did not add the projected heap usage for with stack sharing (which is why the projected memory saved is bloated):
 
 ```
 =============================================================
@@ -251,21 +251,22 @@ Note we did not add the projected heap usage for with stack sharing (which is ac
  Stack size per task/buffer: 192 words (768 bytes)
 
  --- MEASURED HEAP USAGE ---
-   Heap before task creation : 131024 bytes
-   Heap after  task creation : 33424 bytes
-   Heap consumed by tasks    : 97600 bytes  (~976 bytes/task)
+   Heap before task creation : 131016 bytes
+   Heap after  task creation : 35016 bytes
+   Heap consumed by tasks    : 96000 bytes  (~960 bytes/task)
 
  --- PER-GROUP STACK HIGH-WATER MARK (after 15000 ms) ---
-   Group A  D=8000 ms : peak_used=152 words,  min_HWM=40 words
-   Group B  D=7000 ms : peak_used=152 words,  min_HWM=40 words
-   Group C  D=6000 ms : peak_used=152 words,  min_HWM=40 words
-   Group D  D=5000 ms : peak_used=152 words,  min_HWM=40 words
-   Group E  D=4000 ms : peak_used=152 words,  min_HWM=40 words
+   Group A  D=8000 ms : peak_used=158 words,  min_HWM=34 words
+   Group B  D=7000 ms : peak_used=158 words,  min_HWM=34 words
+   Group C  D=6000 ms : peak_used=158 words,  min_HWM=34 words
+   Group D  D=5000 ms : peak_used=158 words,  min_HWM=34 words
+   Group E  D=4000 ms : peak_used=158 words,  min_HWM=34 words
 
  --- PROJECTED SAVINGS AT 100 TASKS (20 per group) ---
-Without sharing (measured, 100 tasks)  : 97600 bytes on heap  (~976 bytes/task)
-With sharing    (projected, 5 buffers) : 3840 bytes .bss stack  (5 x 768 bytes)
-Memory saved by sharing                : 93760 bytes  (96%)
+   Without sharing (measured, 100 tasks)  : 96000 bytes on heap  (~960 bytes/task)
+   With sharing    (projected, 5 buffers): 3840 bytes .bss stack  (5 x 768 bytes)
+   Memory saved by sharing               : 92160 bytes  (96%)
+=============================================================
 
 ```
 

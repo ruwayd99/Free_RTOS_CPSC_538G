@@ -6,19 +6,7 @@ stack-sharing implementation.
 
 ## 1. Functional bugs
 
-### ~~1.1 Single-holder model breaks when two tasks hold overlapping units of the same resource~~ — FIXED
-
-**Fixed.** `SRPResourceControl_t` now tracks a `xHolders[configMAX_SRP_USERS_PER_RESOURCE]`
-array of `SRPHolderRecord_t` entries (`{xHolder, uxUnitsHeld, uxHolderLevel}`) plus
-`uxHolderCount`. `xSRPResourceTake` adds a new entry per task or accumulates into an
-existing one (re-entry). `vSRPResourceGive` decrements and removes the entry when
-`uxUnitsHeld` reaches zero (compacts by swapping with the last entry). All release
-paths (Give, drop-late-job, task delete) scan the array rather than comparing against
-one handle. `prvSRPCanTaskRun` was also fixed to allow any task with
-`uxSRPHeldResources > 0` to resume — not just `pxCurrentTCB` — so a task preempted
-mid-CS by a higher-level task can correctly resume when the preemptor finishes.
-
-### 1.2 Admission `B_i` is over-approximate for multi-unit resources
+### 1.1 Admission `B_i` is over-approximate for multi-unit resources
 
 `prvSRPComputeBlockingBoundForLevel` treats each resource as if the
 entire critical section of the worst low-level user could block the
@@ -31,7 +19,7 @@ sets that are actually feasible.
 **Impact.** None of the provided tests hit the pessimism boundary, but
 on dense workloads this will produce false rejections.
 
-### 1.3 `vSRPResourceRegisterUser` is not called for dynamically-created resources after admission
+### 1.2 `vSRPResourceRegisterUser` is not called for dynamically-created resources after admission
 
 The API is "register before admit." If a test creates a new resource
 at runtime and calls `vSRPResourceRegisterUser` for an already-admitted
@@ -43,7 +31,7 @@ admission snapshot is stale.
 `prvEDFAdmissionControl` over the current set plus new blocking
 terms.
 
-### 1.4 No tracking of which resources a task is "allowed" to take
+### 1.3 No tracking of which resources a task is "allowed" to take
 
 Nothing prevents a task from calling `xSRPResourceTake` on a resource
 for which it was not registered. The assertions inside
