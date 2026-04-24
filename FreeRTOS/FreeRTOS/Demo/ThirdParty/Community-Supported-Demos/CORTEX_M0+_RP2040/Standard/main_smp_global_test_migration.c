@@ -2,8 +2,77 @@
 #include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timers.h"
 #include "pico/stdlib.h"
 #include "pico/platform.h"
+
+#define PIN_G_HINT 10
+#define PIN_G_PEER 11
+#define PIN_IDLE0 19
+#define PIN_IDLE1 20
+#define PIN_TIMER 21
+
+/* ---- GPIO Kernel-Hook Trace Infrastructure -------------------------------- */
+#define TRACE_MAX_TASKS  12
+
+static TaskHandle_t        xTraceHandles[ TRACE_MAX_TASKS ];
+static uint                uiTracePins  [ TRACE_MAX_TASKS ];
+static volatile int        iTraceCount  = 0;
+static volatile BaseType_t bSysTasksReg = pdFALSE;
+
+static void prvTraceRegister( TaskHandle_t xHandle, uint uiPin )
+{
+    if( ( xHandle != NULL ) && ( iTraceCount < TRACE_MAX_TASKS ) )
+    {
+        xTraceHandles[ iTraceCount ] = xHandle;
+        uiTracePins  [ iTraceCount ] = uiPin;
+        iTraceCount++;
+    }
+}
+
+void vTraceOnTaskSwitchedIn( void )
+{
+    int i;
+    TaskHandle_t xHandle;
+
+    if( bSysTasksReg == pdFALSE )
+    {
+        bSysTasksReg = pdTRUE;
+        { TaskHandle_t h = xTaskGetIdleTaskHandleForCore( 0 );
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_IDLE0; } }
+        { TaskHandle_t h = xTaskGetIdleTaskHandleForCore( 1 );
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_IDLE1; } }
+        { TaskHandle_t h = xTimerGetTimerDaemonTaskHandle();
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_TIMER; } }
+    }
+
+    xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
+    {
+        if( xTraceHandles[ i ] == xHandle )
+        {
+            gpio_put( uiTracePins[ i ], 1 );
+            break;
+        }
+    }
+}
+
+void vTraceOnTaskSwitchedOut( void )
+{
+    int i;
+    TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
+    {
+        if( xTraceHandles[ i ] == xHandle )
+        {
+            gpio_put( uiTracePins[ i ], 0 );
+            break;
+        }
+    }
+}
 
 typedef struct
 {
@@ -15,8 +84,8 @@ typedef struct
 static TaskHandle_t xHintedTaskHandle = NULL;
 static TaskHandle_t xPeerTaskHandle = NULL;
 
-static SMPGlobalMigrationParams_t xHintedParams = { "G_HINT", 20, pdMS_TO_TICKS( 90 ) };
-static SMPGlobalMigrationParams_t xPeerParams = { "G_PEER", 21, pdMS_TO_TICKS( 100 ) };
+static SMPGlobalMigrationParams_t xHintedParams = { "G_HINT", PIN_G_HINT, pdMS_TO_TICKS( 90 ) };
+static SMPGlobalMigrationParams_t xPeerParams = { "G_PEER", PIN_G_PEER, pdMS_TO_TICKS( 100 ) };
 
 static void prvBusyWorkTicks( TickType_t xDurationTicks )
 {
@@ -47,17 +116,7 @@ static void vGlobalWorker( void * pvParameters )
             ulLastCore = ulCore;
         }
 
-        if( pxParams->iPin >= 0 )
-        {
-            gpio_put( pxParams->iPin, 1 );
-        }
-
         prvBusyWorkTicks( pxParams->xWorkTicks );
-
-        if( pxParams->iPin >= 0 )
-        {
-            gpio_put( pxParams->iPin, 0 );
-        }
 
         vTaskDelayUntilNextPeriod( &xLastWake );
     }
@@ -99,8 +158,12 @@ void main_edf_test( void )
         {
             gpio_init( ( uint ) pxTaskParams[ xIndex ]->iPin );
             gpio_set_dir( ( uint ) pxTaskParams[ xIndex ]->iPin, GPIO_OUT );
+            gpio_put( ( uint ) pxTaskParams[ xIndex ]->iPin, 0 );
         }
     }
+    gpio_init( PIN_IDLE0 ); gpio_set_dir( PIN_IDLE0, GPIO_OUT ); gpio_put( PIN_IDLE0, 0 );
+    gpio_init( PIN_IDLE1 ); gpio_set_dir( PIN_IDLE1, GPIO_OUT ); gpio_put( PIN_IDLE1, 0 );
+    gpio_init( PIN_TIMER ); gpio_set_dir( PIN_TIMER, GPIO_OUT ); gpio_put( PIN_TIMER, 0 );
 
     xHintedCreate = xTaskCreateEDFOnCore( vGlobalWorker,
                                           xHintedParams.pcName,
@@ -111,6 +174,10 @@ void main_edf_test( void )
                                           pdMS_TO_TICKS( 300 ),
                                           0,
                                           &xHintedTaskHandle );
+    if( xHintedCreate == pdPASS )
+    {
+        prvTraceRegister( xHintedTaskHandle, PIN_G_HINT );
+    }
 
     xPeerCreate = xTaskCreateEDF( vGlobalWorker,
                                   xPeerParams.pcName,
@@ -120,6 +187,10 @@ void main_edf_test( void )
                                   pdMS_TO_TICKS( 1500 ),
                                   pdMS_TO_TICKS( 350 ),
                                   &xPeerTaskHandle );
+    if( xPeerCreate == pdPASS )
+    {
+        prvTraceRegister( xPeerTaskHandle, PIN_G_PEER );
+    }
 
     ( void ) xTaskCreate( vGlobalController,
                           "G_CTRL",
@@ -133,6 +204,8 @@ void main_edf_test( void )
             ( long ) xPeerCreate,
             ( unsigned long ) uxTaskGetEDFAdmittedCount(),
             ( unsigned long ) uxTaskGetEDFRejectedCount() );
+        printf( "[SMP][GLOBAL][startup] pin map: G_HINT=%d G_PEER=%d IDLE0=%d IDLE1=%d TIMER=%d\r\n",
+            PIN_G_HINT, PIN_G_PEER, PIN_IDLE0, PIN_IDLE1, PIN_TIMER );
 
     vTaskStartScheduler();
 

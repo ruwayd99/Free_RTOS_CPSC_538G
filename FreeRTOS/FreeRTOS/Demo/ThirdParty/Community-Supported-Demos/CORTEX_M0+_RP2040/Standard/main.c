@@ -203,6 +203,13 @@ void vApplicationIdleHook( void )
 }
 /*-----------------------------------------------------------*/
 
+/* Default no-op trace hooks.  Each test file overrides these with a strong
+ * definition that maps task handles to GPIO pins via the kernel context-switch
+ * hooks (traceTASK_SWITCHED_IN / traceTASK_SWITCHED_OUT). */
+__attribute__( ( weak ) ) void vTraceOnTaskSwitchedIn( void ) { }
+__attribute__( ( weak ) ) void vTraceOnTaskSwitchedOut( void ) { }
+/*-----------------------------------------------------------*/
+
 void vApplicationTickHook( void )
 {
 #if ( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 0 ) && ( mainCREATE_EDF_TEST == 0 ) && ( mainCREATE_CBS_TEST == 0 )

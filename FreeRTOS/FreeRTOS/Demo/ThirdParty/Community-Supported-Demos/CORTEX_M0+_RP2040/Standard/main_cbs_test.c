@@ -1,159 +1,209 @@
 
-// Begin FreeRTOS CPSC_538G related - CBS - CBS test with configurable periodic tasks
+// Begin FreeRTOS CPSC_538G related - CBS - CBS basic test
+/*
+ * Pin map (6 channels):
+ *   10 PERIODIC_0   11 PERIODIC_1   12 PERIODIC_2
+ *   21 CBS_aperiodic
+ *   18 IDLE          19 TIMER
+ */
 #include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timers.h"
 #include "pico/stdlib.h"
 
-#define PIN_PERIODIC_BASE  10
-#define PIN_CBS_TASK       21
-
-#define NUM_PERIODIC_TASKS 3
+#define PIN_PERIODIC_BASE   10
+#define PIN_CBS_TASK        11
+#define NUM_PERIODIC_TASKS  3
 
 #define PERIODIC_PERIOD_MS   1000
 #define PERIODIC_WCET_MS     150
 
-#define CBS_PERIOD_MS       1000
-#define CBS_BUDGET_MS       150
+#define CBS_PERIOD_MS        1000
+#define CBS_BUDGET_MS        150
 
 #define APPROX_CBS_TRIGGER_PERIOD_MS  700
 #define CBS_WCET_MS                   90
 
-static TaskHandle_t xCBSTaskHandle = NULL;
-static TaskHandle_t xCBSTriggerHandle = NULL;
-static TaskHandle_t xPeriodicTaskHandles[ NUM_PERIODIC_TASKS ] = { NULL };
+/* System-task pins. */
+#define PIN_IDLE   20
+#define PIN_TIMER  21
 
-static volatile uint32_t ulPeriodicRunCount[ NUM_PERIODIC_TASKS ] = { 0U };
-static volatile uint32_t ulCBSRunCount = 0U;
-static volatile TickType_t xLastCBSTriggerTick = 0U;
-static volatile TickType_t xLastCBSStartTick = 0U;
-static volatile TickType_t xLastCBSEndTick = 0U;
+/* ---- GPIO Kernel-Hook Trace Infrastructure -------------------------------- */
+#define TRACE_MAX_TASKS  10
 
-static void prvBusyWait(TickType_t xTicks)
+static TaskHandle_t        xTraceHandles[ TRACE_MAX_TASKS ];
+static uint                uiTracePins  [ TRACE_MAX_TASKS ];
+static volatile int        iTraceCount  = 0;
+static volatile BaseType_t bSysTasksReg = pdFALSE;
+
+static void prvTraceRegister( TaskHandle_t xHandle, uint uiPin )
 {
-    TickType_t xStart = xTaskGetTickCount();
-    while ((xTaskGetTickCount() - xStart) < xTicks) {}
-}
-
-static void vPeriodicTask(void *pvParameters)
-{
-    int idx = (int)(uintptr_t)pvParameters;
-    const uint pin = PIN_PERIODIC_BASE + idx;
-    gpio_init(pin);
-    gpio_set_dir(pin, GPIO_OUT);
-    TickType_t xLastWake = xTaskGetTickCount();
-
-    printf("[CBS TEST] [PERIODIC_%d] pin=%u started at tick %lu\n",
-           idx,
-           pin,
-           (unsigned long)xTaskGetTickCount());
-
-    for (;;)
+    if( ( xHandle != NULL ) && ( iTraceCount < TRACE_MAX_TASKS ) )
     {
-        gpio_put(pin, 1);
-        ulPeriodicRunCount[ idx ]++;
-        prvBusyWait(pdMS_TO_TICKS(PERIODIC_WCET_MS));
-        gpio_put(pin, 0);
-        vTaskDelayUntilNextPeriod(&xLastWake);
+        xTraceHandles[ iTraceCount ] = xHandle;
+        uiTracePins  [ iTraceCount ] = uiPin;
+        iTraceCount++;
     }
 }
 
-static void vCBSAperiodicTask(void *pvParameters)
+void vTraceOnTaskSwitchedIn( void )
 {
-    (void)pvParameters;
-    gpio_init(PIN_CBS_TASK);
-    gpio_set_dir(PIN_CBS_TASK, GPIO_OUT);
-    printf("[CBS TEST] [CBS_aperiodic] pin=%u started at tick %lu\n",
-           PIN_CBS_TASK,
-           (unsigned long)xTaskGetTickCount());
+    int i;
+    TaskHandle_t xHandle;
 
-    for (;;)
+    if( bSysTasksReg == pdFALSE )
     {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        xLastCBSStartTick = xTaskGetTickCount();
-
-        gpio_put(PIN_CBS_TASK, 1);
-
-        /* Keep CBS runtime < budget so periodic tasks should remain unaffected. */
-        prvBusyWait(pdMS_TO_TICKS(CBS_WCET_MS));
-
-        gpio_put(PIN_CBS_TASK, 0);
-        xLastCBSEndTick = xTaskGetTickCount();
-        ulCBSRunCount++;
-
-        printf("[CBS TEST] [CBS_aperiodic] job=%lu START=%lu END=%lu trigger=%lu\n",
-               (unsigned long)ulCBSRunCount,
-               (unsigned long)xLastCBSStartTick,
-               (unsigned long)xLastCBSEndTick,
-               (unsigned long)xLastCBSTriggerTick);
+        bSysTasksReg = pdTRUE;
+        { TaskHandle_t h = xTaskGetIdleTaskHandle();
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_IDLE; } }
+        { TaskHandle_t h = xTimerGetTimerDaemonTaskHandle();
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_TIMER; } }
     }
-}
 
-static void vCBSTriggerTask(void *pvParameters)
-{
-    (void)pvParameters;
-    for (;;)
+    xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
     {
-        /* Trigger period is approximate; EDF load can shift actual release time. */
-        vTaskDelay(pdMS_TO_TICKS(APPROX_CBS_TRIGGER_PERIOD_MS));
-        if (xCBSTaskHandle)
+        if( xTraceHandles[ i ] == xHandle )
         {
-            xLastCBSTriggerTick = xTaskGetTickCount();
-            xTaskNotifyGive(xCBSTaskHandle);
+            gpio_put( uiTracePins[ i ], 1 );
+            break;
         }
     }
 }
 
-void main_cbs_test(void)
+void vTraceOnTaskSwitchedOut( void )
 {
-    stdio_init_all();
-    printf("[CBS TEST] \n");
-    printf("[CBS TEST] Starting with %d periodic tasks.\n", NUM_PERIODIC_TASKS);
-    printf("[CBS TEST] Version 2.\n");
-
-    printf("[CBS TEST] Pin map: PERIODIC_%d..%d -> GPIO %d..%d, CBS -> GPIO %d\n",
-           0,
-           NUM_PERIODIC_TASKS - 1,
-           PIN_PERIODIC_BASE,
-           PIN_PERIODIC_BASE + NUM_PERIODIC_TASKS - 1,
-           PIN_CBS_TASK);
-
-    // Spawn periodic tasks
-    for (int i = 0; i < NUM_PERIODIC_TASKS; ++i)
+    int i;
+    TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
     {
-        char name[16];
-        snprintf(name, sizeof(name), "PERIODIC_%d", i);
-        configASSERT( xTaskCreateEDF(vPeriodicTask,
-                                     name,
-                                     1024,
-                                     (void *)(uintptr_t)i,
-                                     pdMS_TO_TICKS(PERIODIC_PERIOD_MS),
-                                     pdMS_TO_TICKS(PERIODIC_PERIOD_MS),
-                                     pdMS_TO_TICKS(PERIODIC_WCET_MS),
-                                     &xPeriodicTaskHandles[i]) == pdPASS );
-    }
-
-    // CBS aperiodic task
-    configASSERT( xTaskCreateCBS(vCBSAperiodicTask,
-                                 "CBS",
-                                 1280,
-                                 NULL,
-                                 pdMS_TO_TICKS(CBS_BUDGET_MS),
-                                 pdMS_TO_TICKS(CBS_PERIOD_MS),
-                                 &xCBSTaskHandle) == pdPASS );
-
-    // CBS trigger task
-    configASSERT( xTaskCreate(vCBSTriggerTask,
-                              "CBS_TRIGGER",
-                              1024,
-                              NULL,
-                              tskIDLE_PRIORITY + 1,
-                              &xCBSTriggerHandle) == pdPASS );
-
-    vTaskStartScheduler();
-    for (;;)
-    {
+        if( xTraceHandles[ i ] == xHandle )
+        {
+            gpio_put( uiTracePins[ i ], 0 );
+            break;
+        }
     }
 }
-// End FreeRTOS CPSC_538G related - CBS - CBS test with configurable periodic tasks
+
+/* ---- State --------------------------------------------------------------- */
+static TaskHandle_t xCBSTaskHandle    = NULL;
+static TaskHandle_t xCBSTriggerHandle = NULL;
+static TaskHandle_t xPeriodicTaskHandles[ NUM_PERIODIC_TASKS ] = { NULL };
+
+static volatile uint32_t  ulPeriodicRunCount[ NUM_PERIODIC_TASKS ] = { 0U };
+static volatile uint32_t  ulCBSRunCount = 0U;
+static volatile TickType_t xLastCBSTriggerTick = 0U;
+static volatile TickType_t xLastCBSStartTick   = 0U;
+static volatile TickType_t xLastCBSEndTick     = 0U;
+
+/* ---- Helpers ------------------------------------------------------------- */
+static void prvBusyWait( TickType_t xTicks )
+{
+    TickType_t xStart = xTaskGetTickCount();
+    while( ( xTaskGetTickCount() - xStart ) < xTicks ) {}
+}
+
+/* ---- Task bodies --------------------------------------------------------- */
+static void vPeriodicTask( void * pvParameters )
+{
+    int idx = ( int ) ( uintptr_t ) pvParameters;
+    TickType_t xLastWake = xTaskGetTickCount();
+
+    for( ;; )
+    {
+        ulPeriodicRunCount[ idx ]++;
+        prvBusyWait( pdMS_TO_TICKS( PERIODIC_WCET_MS ) );
+        vTaskDelayUntilNextPeriod( &xLastWake );
+    }
+}
+
+static void vCBSAperiodicTask( void * pvParameters )
+{
+    ( void ) pvParameters;
+
+    for( ;; )
+    {
+        ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+
+        xLastCBSStartTick = xTaskGetTickCount();
+        prvBusyWait( pdMS_TO_TICKS( CBS_WCET_MS ) );
+        xLastCBSEndTick = xTaskGetTickCount();
+        ulCBSRunCount++;
+
+        printf( "[CBS TEST] [CBS_aperiodic] job=%lu START=%lu END=%lu trigger=%lu\n",
+                ( unsigned long ) ulCBSRunCount,
+                ( unsigned long ) xLastCBSStartTick,
+                ( unsigned long ) xLastCBSEndTick,
+                ( unsigned long ) xLastCBSTriggerTick );
+    }
+}
+
+static void vCBSTriggerTask( void * pvParameters )
+{
+    ( void ) pvParameters;
+    for( ;; )
+    {
+        vTaskDelay( pdMS_TO_TICKS( APPROX_CBS_TRIGGER_PERIOD_MS ) );
+        if( xCBSTaskHandle )
+        {
+            xLastCBSTriggerTick = xTaskGetTickCount();
+            xTaskNotifyGive( xCBSTaskHandle );
+        }
+    }
+}
+
+/* ---- Entry point --------------------------------------------------------- */
+void main_cbs_test( void )
+{
+    int i;
+
+    stdio_init_all();
+
+    /* Initialise all GPIO pins before the scheduler starts. */
+    for( i = 0; i < NUM_PERIODIC_TASKS; i++ )
+    {
+        gpio_init( ( uint ) ( PIN_PERIODIC_BASE + i ) );
+        gpio_set_dir( ( uint ) ( PIN_PERIODIC_BASE + i ), GPIO_OUT );
+        gpio_put( ( uint ) ( PIN_PERIODIC_BASE + i ), 0 );
+    }
+    gpio_init( PIN_CBS_TASK ); gpio_set_dir( PIN_CBS_TASK, GPIO_OUT ); gpio_put( PIN_CBS_TASK, 0 );
+    gpio_init( PIN_IDLE );     gpio_set_dir( PIN_IDLE,     GPIO_OUT ); gpio_put( PIN_IDLE,     0 );
+    gpio_init( PIN_TIMER );    gpio_set_dir( PIN_TIMER,    GPIO_OUT ); gpio_put( PIN_TIMER,    0 );
+
+    printf( "[CBS TEST] \n" );
+    printf( "[CBS TEST] Starting with %d periodic tasks.\n", NUM_PERIODIC_TASKS );
+    printf( "[CBS TEST] Version 2.\n" );
+    printf( "[CBS TEST] Pin map: PERIODIC_%d..%d -> GPIO %d..%d, CBS -> GPIO %d, IDLE -> GPIO %d, TIMER -> GPIO %d\n",
+            0, NUM_PERIODIC_TASKS - 1,
+            PIN_PERIODIC_BASE, PIN_PERIODIC_BASE + NUM_PERIODIC_TASKS - 1,
+            PIN_CBS_TASK, PIN_IDLE, PIN_TIMER );
+
+    for( i = 0; i < NUM_PERIODIC_TASKS; i++ )
+    {
+        char name[ 16 ];
+        snprintf( name, sizeof( name ), "PERIODIC_%d", i );
+        configASSERT( xTaskCreateEDF( vPeriodicTask, name, 1024,
+                                      ( void * ) ( uintptr_t ) i,
+                                      pdMS_TO_TICKS( PERIODIC_PERIOD_MS ),
+                                      pdMS_TO_TICKS( PERIODIC_PERIOD_MS ),
+                                      pdMS_TO_TICKS( PERIODIC_WCET_MS ),
+                                      &xPeriodicTaskHandles[ i ] ) == pdPASS );
+        prvTraceRegister( xPeriodicTaskHandles[ i ], ( uint ) ( PIN_PERIODIC_BASE + i ) );
+    }
+
+    configASSERT( xTaskCreateCBS( vCBSAperiodicTask, "CBS", 1280, NULL,
+                                  pdMS_TO_TICKS( CBS_BUDGET_MS ),
+                                  pdMS_TO_TICKS( CBS_PERIOD_MS ),
+                                  &xCBSTaskHandle ) == pdPASS );
+    prvTraceRegister( xCBSTaskHandle, PIN_CBS_TASK );
+
+    configASSERT( xTaskCreate( vCBSTriggerTask, "CBS_TRIGGER", 1024, NULL,
+                               tskIDLE_PRIORITY + 1, &xCBSTriggerHandle ) == pdPASS );
+
+    vTaskStartScheduler();
+    for( ;; ) {}
+}
+// End FreeRTOS CPSC_538G related - CBS - CBS basic test

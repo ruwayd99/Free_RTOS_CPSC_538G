@@ -209,6 +209,15 @@ to exclude the API function. */
 #define INCLUDE_xTaskResumeFromISR              1
 #define INCLUDE_xQueueGetMutexHolder            1
 
+/* GPIO task-trace hooks.
+ * Default no-op weak implementations are in main.c.
+ * Each test file overrides them with a GPIO-mapped implementation that
+ * raises/lowers a pin exactly when a task is switched in or out. */
+extern void vTraceOnTaskSwitchedIn( void );
+extern void vTraceOnTaskSwitchedOut( void );
+#define traceTASK_SWITCHED_IN()   vTraceOnTaskSwitchedIn()
+#define traceTASK_SWITCHED_OUT()  vTraceOnTaskSwitchedOut()
+
 /* A header file that defines trace macro can be included here. */
 
 #endif /* FREERTOS_CONFIG_H */

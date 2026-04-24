@@ -1,22 +1,91 @@
 #include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timers.h"
 #include "pico/stdlib.h"
 
-/* Test pins to visualize key tasks on a logic analyzer. */
+/* GPIO pins for the four workload tasks. */
 #define PIN_TASK_IMPLICIT   10
 #define PIN_TASK_CONSTR     11
 #define PIN_TASK_RT_OK      12
-#define PIN_TASK_RT_REJECT  13
+#define PIN_TASK_RT_REJECT  13   /* stays LOW – admission rejects this task */
 
-/* Forward declarations for task bodies. */
-static void vImplicitTask( void * pvParameters );
-static void vConstrainedTask( void * pvParameters );
-static void vRuntimeImplicitTask( void * pvParameters );
-static void vRuntimeConstrainedTask( void * pvParameters );
-static void vRuntimeCreatorTask( void * pvParameters );
+/* System-task pins shown at the bottom of the logic-analyzer display. */
+#define PIN_IDLE            20
+#define PIN_TIMER           21
 
-/* Simple periodic task with D=T case for implicit admission path. */
+/* ---- GPIO Kernel-Hook Trace Infrastructure --------------------------------
+ * Pins are driven by traceTASK_SWITCHED_IN / traceTASK_SWITCHED_OUT hooks
+ * (defined in FreeRTOSConfig.h to call vTraceOnTaskSwitchedIn/Out below).
+ * Task handles are registered with prvTraceRegister() before the scheduler
+ * starts.  System tasks (idle, timer daemon) are registered lazily on the
+ * first context switch, when their handles are guaranteed to be valid.
+ * -------------------------------------------------------------------------- */
+#define TRACE_MAX_TASKS     12
+
+static TaskHandle_t        xTraceHandles[ TRACE_MAX_TASKS ];
+static uint                uiTracePins  [ TRACE_MAX_TASKS ];
+static volatile int        iTraceCount  = 0;
+static volatile BaseType_t bSysTasksReg = pdFALSE;
+
+static void prvTraceRegister( TaskHandle_t xHandle, uint uiPin )
+{
+    if( ( xHandle != NULL ) && ( iTraceCount < TRACE_MAX_TASKS ) )
+    {
+        xTraceHandles[ iTraceCount ] = xHandle;
+        uiTracePins  [ iTraceCount ] = uiPin;
+        iTraceCount++;
+    }
+}
+
+/* Called from traceTASK_SWITCHED_IN() inside the PendSV handler
+ * (interrupts disabled → single-core access is race-free). */
+void vTraceOnTaskSwitchedIn( void )
+{
+    int i;
+    TaskHandle_t xHandle;
+
+    if( bSysTasksReg == pdFALSE )
+    {
+        bSysTasksReg = pdTRUE;
+        { TaskHandle_t h = xTaskGetIdleTaskHandle();
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_IDLE; } }
+        { TaskHandle_t h = xTimerGetTimerDaemonTaskHandle();
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_TIMER; } }
+    }
+
+    xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
+    {
+        if( xTraceHandles[ i ] == xHandle )
+        {
+            gpio_put( uiTracePins[ i ], 1 );
+            break;
+        }
+    }
+}
+
+void vTraceOnTaskSwitchedOut( void )
+{
+    int i;
+    TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
+    {
+        if( xTraceHandles[ i ] == xHandle )
+        {
+            gpio_put( uiTracePins[ i ], 0 );
+            break;
+        }
+    }
+}
+
+/* ---- Task bodies -------------------------------------------------------
+ * GPIO is driven exclusively by the kernel hooks above; no gpio_put() calls
+ * appear here.
+ * ---------------------------------------------------------------------- */
+
 static void vImplicitTask( void * pvParameters )
 {
     ( void ) pvParameters;
@@ -24,21 +93,12 @@ static void vImplicitTask( void * pvParameters )
 
     for( ;; )
     {
-        gpio_put( PIN_TASK_IMPLICIT, 1 );
-
-        /* Simulate bounded execution below WCET. */
         TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 1000 ) )
-        {
-            /* Busy compute for deterministic demo behavior. */
-        }
-
-        gpio_put( PIN_TASK_IMPLICIT, 0 );
+        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 1000 ) ) { }
         vTaskDelayUntilNextPeriod( &xLastWake );
     }
 }
 
-/* Constrained task with D<T to force exact DBF admission path. */
 static void vConstrainedTask( void * pvParameters )
 {
     ( void ) pvParameters;
@@ -46,20 +106,12 @@ static void vConstrainedTask( void * pvParameters )
 
     for( ;; )
     {
-        gpio_put( PIN_TASK_CONSTR, 1 );
-
         TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 1000 ) )
-        {
-            /* Busy compute for constrained workload. */
-        }
-
-        gpio_put( PIN_TASK_CONSTR, 0 );
+        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 1000 ) ) { }
         vTaskDelayUntilNextPeriod( &xLastWake );
     }
 }
 
-/* Runtime-added implicit task on a unique pin. */
 static void vRuntimeImplicitTask( void * pvParameters )
 {
     ( void ) pvParameters;
@@ -67,20 +119,12 @@ static void vRuntimeImplicitTask( void * pvParameters )
 
     for( ;; )
     {
-        gpio_put( PIN_TASK_RT_OK, 1 );
-
         TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 500 ) )
-        {
-            /* Busy compute for deterministic demo behavior. */
-        }
-
-        gpio_put( PIN_TASK_RT_OK, 0 );
+        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 500 ) ) { }
         vTaskDelayUntilNextPeriod( &xLastWake );
     }
 }
 
-/* Runtime-added constrained task on a unique pin. */
 static void vRuntimeConstrainedTask( void * pvParameters )
 {
     ( void ) pvParameters;
@@ -88,48 +132,55 @@ static void vRuntimeConstrainedTask( void * pvParameters )
 
     for( ;; )
     {
-        gpio_put( PIN_TASK_RT_REJECT, 1 );
-
         TickType_t xStart = xTaskGetTickCount();
-        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 500 ) )
-        {
-            /* Busy compute for constrained workload. */
-        }
-
-        gpio_put( PIN_TASK_RT_REJECT, 0 );
+        while( ( xTaskGetTickCount() - xStart ) < pdMS_TO_TICKS( 500 ) ) { }
         vTaskDelayUntilNextPeriod( &xLastWake );
     }
 }
 
-/* Runtime creator validates "add task while running" and admission rejection path. */
+/* Runtime creator – adds two EDF tasks while the scheduler is live.
+ * The first is accepted; the second is intentionally heavy and rejected.
+ * Accepted handles are registered with the trace table. */
 static void vRuntimeCreatorTask( void * pvParameters )
 {
+    TaskHandle_t xHandle;
+    BaseType_t xResult;
     ( void ) pvParameters;
-    /* Wait so scheduler is clearly running before runtime add. */
+
     vTaskDelay( pdMS_TO_TICKS( 5000 ) );
 
-    /* This one should typically pass if your base set has slack. */
-    ( void ) xTaskCreateEDF( vRuntimeImplicitTask,
-                             "RT_ADD_OK",
-                             256,
-                             NULL,
-                             pdMS_TO_TICKS( 2500 ),
-                             pdMS_TO_TICKS( 2000 ),
-                             pdMS_TO_TICKS( 500 ),
-                             NULL );
+    /* Should pass if the base set has utilisation slack. */
+    xResult = xTaskCreateEDF( vRuntimeImplicitTask,
+                              "RT_ADD_OK",
+                              256,
+                              NULL,
+                              pdMS_TO_TICKS( 2500 ),
+                              pdMS_TO_TICKS( 2000 ),
+                              pdMS_TO_TICKS( 500 ),
+                              &xHandle );
+    if( xResult == pdPASS )
+    {
+        taskENTER_CRITICAL();
+        prvTraceRegister( xHandle, PIN_TASK_RT_OK );
+        taskEXIT_CRITICAL();
+    }
 
-    /* This one is intentionally heavy to trigger admission reject. */
-    ( void ) xTaskCreateEDF( vRuntimeConstrainedTask,
-                             "RT_ADD_REJECT",
-                             256,
-                             NULL,
-                             pdMS_TO_TICKS( 2500 ),
-                             pdMS_TO_TICKS( 1500 ),
-                             pdMS_TO_TICKS( 500 ),
-                             NULL );
+    /* Intentionally heavy – should be rejected; PIN_TASK_RT_REJECT stays LOW. */
+    xResult = xTaskCreateEDF( vRuntimeConstrainedTask,
+                              "RT_ADD_REJECT",
+                              256,
+                              NULL,
+                              pdMS_TO_TICKS( 2500 ),
+                              pdMS_TO_TICKS( 1500 ),
+                              pdMS_TO_TICKS( 500 ),
+                              &xHandle );
+    if( xResult == pdPASS )
+    {
+        taskENTER_CRITICAL();
+        prvTraceRegister( xHandle, PIN_TASK_RT_REJECT );
+        taskEXIT_CRITICAL();
+    }
 
-    /* Optionally force overload/miss by spinning too long in this task or others,
-     * then confirm kernel emits [drop] trace and skips late job immediately. */
     for( ;; )
     {
         vTaskDelay( pdMS_TO_TICKS( 1000 ) );
@@ -138,53 +189,55 @@ static void vRuntimeCreatorTask( void * pvParameters )
 
 void main_edf_test_previous( void )
 {
-    gpio_init( PIN_TASK_IMPLICIT );
-    gpio_set_dir( PIN_TASK_IMPLICIT, GPIO_OUT );
-    gpio_init( PIN_TASK_CONSTR );
-    gpio_set_dir( PIN_TASK_CONSTR, GPIO_OUT );
-    gpio_init( PIN_TASK_RT_OK );
-    gpio_set_dir( PIN_TASK_RT_OK, GPIO_OUT );
-    gpio_init( PIN_TASK_RT_REJECT );
-    gpio_set_dir( PIN_TASK_RT_REJECT, GPIO_OUT );
+    TaskHandle_t xHandle;
 
-    /* Print startup task table so demo clearly shows all (C,T,D) values. */
+    /* Initialise GPIO for all traced pins (task + system). */
+    const uint auPins[] = { PIN_TASK_IMPLICIT, PIN_TASK_CONSTR,
+                            PIN_TASK_RT_OK,    PIN_TASK_RT_REJECT,
+                            PIN_IDLE,          PIN_TIMER };
+    for( size_t i = 0; i < sizeof( auPins ) / sizeof( auPins[ 0 ] ); i++ )
+    {
+        gpio_init( auPins[ i ] );
+        gpio_set_dir( auPins[ i ], GPIO_OUT );
+        gpio_put( auPins[ i ], 0 );
+    }
+
     printf( "[EDF][startup] Creating initial task set...\r\n" );
 
-    /* Implicit case: D = T -> utilization admission path. */
-    ( void ) xTaskCreateEDF( vImplicitTask,
-                             "IMPLICIT_A",
-                             256,
-                             NULL,
-                             pdMS_TO_TICKS( 5000 ),
-                             pdMS_TO_TICKS( 4000 ),
-                             pdMS_TO_TICKS( 1000 ),
-                             NULL );
+    /* Implicit case: D == T → utilisation admission path. */
+    xTaskCreateEDF( vImplicitTask,
+                    "IMPLICIT_A",
+                    256,
+                    NULL,
+                    pdMS_TO_TICKS( 5000 ),
+                    pdMS_TO_TICKS( 4000 ),
+                    pdMS_TO_TICKS( 1000 ),
+                    &xHandle );
+    prvTraceRegister( xHandle, PIN_TASK_IMPLICIT );
 
-    /* Constrained case: D < T -> exact DBF path. */
-    ( void ) xTaskCreateEDF( vConstrainedTask,
-                             "CONSTR_B",
-                             256,
-                             NULL,
-                             pdMS_TO_TICKS( 10000 ),
-                             pdMS_TO_TICKS( 8000 ),
-                             pdMS_TO_TICKS( 1000 ),
-                             NULL );
+    /* Constrained case: D < T → exact DBF admission path. */
+    xTaskCreateEDF( vConstrainedTask,
+                    "CONSTR_B",
+                    256,
+                    NULL,
+                    pdMS_TO_TICKS( 10000 ),
+                    pdMS_TO_TICKS( 8000 ),
+                    pdMS_TO_TICKS( 1000 ),
+                    &xHandle );
+    prvTraceRegister( xHandle, PIN_TASK_CONSTR );
 
-    /* Runtime creator task itself can be normal FreeRTOS or EDF.
-     * Using xTaskCreate keeps this helper outside EDF admission accounting. */
-    ( void ) xTaskCreate( vRuntimeCreatorTask,
-                          "RUNTIME_CREATOR",
-                          256,
-                          NULL,
-                          tskIDLE_PRIORITY + 1U,
-                          NULL );
+    /* Non-EDF orchestrator that adds runtime tasks.  Kept outside EDF
+     * admission accounting. */
+    xTaskCreate( vRuntimeCreatorTask,
+                 "RUNTIME_CREATOR",
+                 256,
+                 NULL,
+                 tskIDLE_PRIORITY + 1U,
+                 NULL );
 
     vTaskStartScheduler();
 
-    for( ;; )
-    {
-        /* Should never execute unless scheduler fails to start. */
-    }
+    for( ;; ) { }
 }
 
 void main_edf_test( void )

@@ -1,86 +1,52 @@
 /*
  * CPSC 538G  -  SRP stack-sharing quantitative demo.
  *
- * Professor requirement (FreeRTOS-README.md):
- *   "Carry out a quantitative study with stack sharing vs. no stack sharing.
- *    Report the gains in terms of the maximum run-time stack storage used.
- *    It is sufficient to run 100 tasks simultaneously."
+ * 100 EDF+SRP tasks in 5 preemption-level groups demonstrate stack-sharing
+ * savings.  One task per group drives a GPIO pin for logic-analyzer visibility;
+ * two additional pins show the idle task and the timer daemon.
  *
- * -----------------------------------------------------------------------
- *  Baker's SRP theorem (Sec. 7.8.5 of Buttazzo; Baker 1991):
- *
- *    "In SRP, if two tasks have the same preemption level they can never
- *     occupy stack space at the same time."
- *
- *  Consequence: one physical stack buffer is sufficient for ALL tasks at
- *  a given preemption level, no matter how many tasks there are.
- * -----------------------------------------------------------------------
- *
- *  DEMO STRUCTURE
- *  ==============
- *
- *  Mode OFF  (configSRP_STACK_SHARING = 0, default):
- *      Creates 100 EDF+SRP tasks in 5 preemption-level groups.
- *      Every task has its own heap-allocated stack.
- *      All 100 tasks execute periodically with full EDF+SRP scheduling.
- *      Heap consumed = 100 x (sizeof(TCB) + stack_bytes) ~ 97 KB.
- *
- *  Mode ON   (configSRP_STACK_SHARING = 1):
- *      Creates 20 tasks per preemption-level group (100 total), all tasks
- *      within the same group sharing ONE static stack buffer.
- *      Each task is created with xTaskCreateEDFWithStack(); only the TCB
- *      (+ a 20-word private context snapshot) is heap-allocated per task.
- *      Heap consumed = 100 x (sizeof(TCB) + 20 words) ~ 10 KB.
- *      Static .bss  = 5 x stack_bytes                 ~ 3.8 KB.
- *
- *  Runtime stack sharing is enforced by three kernel hooks:
- *   1. Private snapshot (20 words) saves the initial register frame per task.
- *   2. Dispatch hook (vTaskSwitchContext) copies snapshot → shared buffer on
- *      fresh-start dispatch; does nothing for cross-level preemption resume.
- *   3. Selector guard (prvEDFSelectRunnableTaskBySRP) blocks a fresh-start
- *      task while any same-level peer has mid-execution context on the buffer.
- * -----------------------------------------------------------------------
- *
- *  Group layout (all T = 8000 ms, WCET = 4 ms):
- *     Group A   D = 8000 ms
- *     Group B   D = 7000 ms
- *     Group C   D = 6000 ms
- *     Group D   D = 5000 ms
- *     Group E   D = 4000 ms
+ * Pin map (7 channels):
+ *   10 Group-A   11 Group-B   12 Group-C   20 Group-D   19 Group-E
+ *   13 IDLE       18 TIMER
  */
 
 #include <stdio.h>
 #include <string.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timers.h"
 #include "pico/stdlib.h"
 
-/* ---- Configuration ---------------------------------------------------- */
+/* ---- Configuration ---- */
 #define SRP100_GROUPS            5
-#define SRP100_PER_GROUP_OFF     20          /* mode OFF tasks per group */
+#define SRP100_PER_GROUP_OFF     20
 #define SRP100_NUM_TASKS_OFF     ( SRP100_GROUPS * SRP100_PER_GROUP_OFF )
 #define SRP100_STACK_WORDS       192
-#define SRP100_REPORT_DELAY_MS   15000       /* wait before final report   */
-#define SRP100_NUM_MONITORED     5           /* GPIO-traced tasks          */
+#define SRP100_REPORT_DELAY_MS   15000
+#define SRP100_NUM_MONITORED     5
 
-/* GPIO pins, one per group (only 5 used so every mode uses the same pins). */
+/* GPIO pins, one per group. */
 static const int piGroupMonitorPins[ SRP100_GROUPS ] =
 {
-    10, 11, 12, 20, 19
+    10, 11, 12, 13, 18
 };
 
-/* ---- Shared stack buffers (only exist when sharing is ON) ------------- */
+/* System-task pins. */
+#define PIN_IDLE   20
+#define PIN_TIMER  21
+
+/* ---- Shared stack buffers (stack-sharing mode) -------------------------- */
 #if ( configSRP_STACK_SHARING == 1 )
     static StackType_t xSharedStacks[ SRP100_GROUPS ][ SRP100_STACK_WORDS ];
 #endif
 
-/* ---- Resources -------------------------------------------------------- */
+/* ---- Resources --------------------------------------------------------- */
 static SRPResourceHandle_t xR1 = NULL;
 static SRPResourceHandle_t xR2 = NULL;
 static SRPResourceHandle_t xR3 = NULL;
 static SRPResourceHandle_t xR4 = NULL;
 
-/* ---- Per-task parameters ---------------------------------------------- */
+/* ---- Per-task parameters ----------------------------------------------- */
 typedef struct
 {
     int                 iIndex;
@@ -90,8 +56,7 @@ typedef struct
     SRPResourceHandle_t xResource;
 } SRP100Params_t;
 
-/* Room for whichever mode creates more tasks (OFF=100, ON=5). */
-static SRP100Params_t xTaskParams[ SRP100_NUM_TASKS_OFF ];
+static SRP100Params_t xTaskParams [ SRP100_NUM_TASKS_OFF ];
 static TaskHandle_t   xTaskHandles[ SRP100_NUM_TASKS_OFF ];
 
 static const TickType_t xGroupDeadlineMs[ SRP100_GROUPS ] =
@@ -99,19 +64,78 @@ static const TickType_t xGroupDeadlineMs[ SRP100_GROUPS ] =
     8000, 7000, 6000, 5000, 4000
 };
 
-/* Heap snapshots shared with the monitor task. */
+/* Heap snapshots. */
 static size_t xHeapBeforeCreate = 0;
 static size_t xHeapAfterCreate  = 0;
 static int    iTasksCreated     = 0;
 
-/* ---- Trace macro ------------------------------------------------------- */
+/* ---- Trace macro ---- */
 #if ( configEDF_TRACE_ENABLE == 1 )
     #define srp100_TRACE( ... )    printf( __VA_ARGS__ )
 #else
     #define srp100_TRACE( ... )
 #endif
 
-/* ---- Helpers ---------------------------------------------------------- */
+/* ---- GPIO Kernel-Hook Trace Infrastructure -------------------------------- */
+#define TRACE_MAX_TASKS  ( SRP100_GROUPS + 4 )
+
+static TaskHandle_t        xTraceHandles[ TRACE_MAX_TASKS ];
+static uint                uiTracePins  [ TRACE_MAX_TASKS ];
+static volatile int        iTraceCount  = 0;
+static volatile BaseType_t bSysTasksReg = pdFALSE;
+
+static void prvTraceRegister( TaskHandle_t xHandle, uint uiPin )
+{
+    if( ( xHandle != NULL ) && ( iTraceCount < TRACE_MAX_TASKS ) )
+    {
+        xTraceHandles[ iTraceCount ] = xHandle;
+        uiTracePins  [ iTraceCount ] = uiPin;
+        iTraceCount++;
+    }
+}
+
+void vTraceOnTaskSwitchedIn( void )
+{
+    int i;
+    TaskHandle_t xHandle;
+
+    if( bSysTasksReg == pdFALSE )
+    {
+        bSysTasksReg = pdTRUE;
+        { TaskHandle_t h = xTaskGetIdleTaskHandle();
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_IDLE; } }
+        { TaskHandle_t h = xTimerGetTimerDaemonTaskHandle();
+          if( h != NULL && iTraceCount < TRACE_MAX_TASKS )
+          { xTraceHandles[ iTraceCount ] = h; uiTracePins[ iTraceCount++ ] = PIN_TIMER; } }
+    }
+
+    xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
+    {
+        if( xTraceHandles[ i ] == xHandle )
+        {
+            gpio_put( uiTracePins[ i ], 1 );
+            break;
+        }
+    }
+}
+
+void vTraceOnTaskSwitchedOut( void )
+{
+    int i;
+    TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+    for( i = 0; i < iTraceCount; i++ )
+    {
+        if( xTraceHandles[ i ] == xHandle )
+        {
+            gpio_put( uiTracePins[ i ], 0 );
+            break;
+        }
+    }
+}
+
+/* ---- Helpers ---- */
 static UBaseType_t prvLevel( TickType_t xD )
 {
     return ( UBaseType_t ) ( portMAX_DELAY - xD );
@@ -123,7 +147,7 @@ static void prvBusyWorkTicks( TickType_t xDuration )
     while( ( xTaskGetTickCount() - xStart ) < xDuration ) { }
 }
 
-/* ---- Periodic worker -------------------------------------------------- */
+/* ---- Periodic worker ---- */
 static void vPeriodicWorkerSRP( void * pvParameters )
 {
     SRP100Params_t * p = ( SRP100Params_t * ) pvParameters;
@@ -131,11 +155,6 @@ static void vPeriodicWorkerSRP( void * pvParameters )
 
     for( ;; )
     {
-        if( p->iPin >= 0 )
-        {
-            gpio_put( ( uint ) p->iPin, 1 );
-        }
-
         if( p->xResource != NULL )
         {
             while( xSRPResourceTake( p->xResource, 1U ) != pdPASS )
@@ -150,23 +169,17 @@ static void vPeriodicWorkerSRP( void * pvParameters )
             prvBusyWorkTicks( p->xWcetTicks );
         }
 
-        if( p->iPin >= 0 )
-        {
-            gpio_put( ( uint ) p->iPin, 0 );
-        }
-
         vTaskDelayUntilNextPeriod( &xLastWake );
     }
 }
 
-/* ---- Monitor task ----------------------------------------------------- */
+/* ---- Monitor task ---- */
 static void vMonitorTask( void * pvParameters )
 {
     ( void ) pvParameters;
 
     vTaskDelay( pdMS_TO_TICKS( SRP100_REPORT_DELAY_MS ) );
 
-    /* Gather HWM stats (per-group peak + min). */
     UBaseType_t uxGroupPeakUsed[ SRP100_GROUPS ];
     UBaseType_t uxGroupMinHWM  [ SRP100_GROUPS ];
 
@@ -189,11 +202,9 @@ static void vMonitorTask( void * pvParameters )
     }
 
     size_t xHeapConsumed = ( xHeapBeforeCreate > xHeapAfterCreate )
-                         ? ( xHeapBeforeCreate - xHeapAfterCreate )
-                         : 0U;
+                         ? ( xHeapBeforeCreate - xHeapAfterCreate ) : 0U;
     size_t xPerTaskHeap  = ( iTasksCreated > 0 )
-                         ? ( xHeapConsumed / ( size_t ) iTasksCreated )
-                         : 0U;
+                         ? ( xHeapConsumed / ( size_t ) iTasksCreated ) : 0U;
 
     printf( "\r\n" );
     printf( "=============================================================\r\n" );
@@ -240,8 +251,6 @@ static void vMonitorTask( void * pvParameters )
         unsigned long uxBssBytes = ( unsigned long ) ( SRP100_GROUPS * SRP100_STACK_WORDS * 4 );
 
 #if ( configSRP_STACK_SHARING == 0 )
-        /* Mode OFF: we measured the real no-sharing heap cost.
-         * Project the sharing cost as the 5 static buffers only (.bss). */
         unsigned long uxNoShareActual  = ( unsigned long ) xHeapConsumed;
         unsigned long uxShareProjected = uxBssBytes;
         unsigned long uxSaved          = ( uxNoShareActual > uxShareProjected )
@@ -251,8 +260,7 @@ static void vMonitorTask( void * pvParameters )
 
         printf( "   Without sharing (measured, %d tasks)  : %lu bytes on heap"
                 "  (~%lu bytes/task)\r\n",
-                iTasksCreated,
-                uxNoShareActual,
+                iTasksCreated, uxNoShareActual,
                 ( unsigned long ) xPerTaskHeap );
         printf( "   With sharing    (projected, %d buffers): %lu bytes .bss stack"
                 "  (%d x %d bytes)\r\n",
@@ -261,9 +269,6 @@ static void vMonitorTask( void * pvParameters )
         printf( "   Memory saved by sharing               : %lu bytes  (%lu%%)\r\n",
                 uxSaved, uxPct );
 #else
-        /* Mode ON: we measured the real sharing heap cost (TCBs + snapshots).
-         * Add the known .bss cost for the 5 static buffers.
-         * Project the no-sharing cost as 100 x stack_bytes (theoretical). */
         unsigned long uxShareActual    = ( unsigned long ) xHeapConsumed + uxBssBytes;
         unsigned long uxNoShareProject = ( unsigned long ) ( SRP100_NUM_TASKS_OFF * SRP100_STACK_WORDS * 4 );
         unsigned long uxSaved          = ( uxNoShareProject > uxShareActual )
@@ -276,10 +281,8 @@ static void vMonitorTask( void * pvParameters )
                 uxNoShareProject, SRP100_STACK_WORDS * 4 );
         printf( "   With sharing    (measured,  %d tasks)  : %lu bytes heap"
                 " + %lu bytes .bss = %lu bytes total\r\n",
-                iTasksCreated,
-                ( unsigned long ) xHeapConsumed,
-                uxBssBytes,
-                uxShareActual );
+                iTasksCreated, ( unsigned long ) xHeapConsumed,
+                uxBssBytes, uxShareActual );
         printf( "   Memory saved by sharing               : %lu bytes  (%lu%%)\r\n",
                 uxSaved, uxPct );
 #endif
@@ -298,17 +301,12 @@ static void vMonitorTask( void * pvParameters )
     }
 }
 
-/* ----------------------------------------------------------------------
- *  Task-set builders
- * ---------------------------------------------------------------------- */
+/* ---- Task-set builders ---- */
 
 #if ( configSRP_STACK_SHARING == 0 )
-/*  Mode OFF : 100 tasks, per-task heap stacks.                           */
 static void prvBuildTasksModeOff( void )
 {
-    int i;
-    int uxAccepted = 0;
-    int uxRejected = 0;
+    int i, uxAccepted = 0, uxRejected = 0;
 
     printf( "[SRP100] Mode OFF : creating %d tasks (each with its own heap stack)\r\n",
             SRP100_NUM_TASKS_OFF );
@@ -337,16 +335,18 @@ static void prvBuildTasksModeOff( void )
 
         snprintf( pcName, sizeof( pcName ), "S%c%02d", 'A' + iGroup, iSlot );
 
-        xResult = xTaskCreateEDF( vPeriodicWorkerSRP,
-                                  pcName,
-                                  SRP100_STACK_WORDS,
-                                  &xTaskParams[ i ],
-                                  xT, xD, xC,
-                                  &xTaskHandles[ i ] );
+        xResult = xTaskCreateEDF( vPeriodicWorkerSRP, pcName,
+                                  SRP100_STACK_WORDS, &xTaskParams[ i ],
+                                  xT, xD, xC, &xTaskHandles[ i ] );
 
         if( xResult == pdPASS )
         {
             uxAccepted++;
+            /* Only slot-0 of each group is traced on GPIO. */
+            if( xTaskParams[ i ].iPin >= 0 )
+            {
+                prvTraceRegister( xTaskHandles[ i ], ( uint ) xTaskParams[ i ].iPin );
+            }
         }
         else
         {
@@ -362,18 +362,11 @@ static void prvBuildTasksModeOff( void )
 #endif /* configSRP_STACK_SHARING == 0 */
 
 #if ( configSRP_STACK_SHARING == 1 )
-/*  Mode ON : 20 tasks per group (100 total), all tasks in a group share ONE
- *  static stack buffer.  The kernel's private-snapshot + dispatch-hook
- *  mechanism (TODOs 1-6) ensures each task starts fresh on every dispatch
- *  and same-level tasks never corrupt each other's context.              */
 static void prvBuildTasksModeOn( void )
 {
-    int i;
-    int uxAccepted = 0;
-    int uxRejected = 0;
+    int i, uxAccepted = 0, uxRejected = 0;
 
-    printf( "[SRP100] Mode ON  : creating %d tasks (%d per group x %d groups),\r\n"
-            "[SRP100]            all tasks in a group share ONE static stack buffer\r\n",
+    printf( "[SRP100] Mode ON  : creating %d tasks (%d per group x %d groups)\r\n",
             SRP100_NUM_TASKS_OFF, SRP100_PER_GROUP_OFF, SRP100_GROUPS );
 
     for( i = 0; i < SRP100_NUM_TASKS_OFF; i++ )
@@ -388,22 +381,17 @@ static void prvBuildTasksModeOn( void )
 
         xTaskParams[ i ].iIndex     = i;
         xTaskParams[ i ].iGroup     = iGroup;
-        /* Only the first task in each group drives the GPIO monitor pin. */
         xTaskParams[ i ].iPin       = ( iSlot == 0 ) ? piGroupMonitorPins[ iGroup ] : -1;
         xTaskParams[ i ].xWcetTicks = xC;
         {
             SRPResourceHandle_t xResources[] = { xR1, xR2, xR3, xR4, xR1 };
-            /* First 3 tasks per group use the group's shared resource. */
             xTaskParams[ i ].xResource = ( iSlot < 3 ) ? xResources[ iGroup ] : NULL;
         }
 
         snprintf( pcName, sizeof( pcName ), "S%c%02d", 'A' + iGroup, iSlot );
 
-        /* All tasks in iGroup pass the SAME shared buffer. */
-        xResult = xTaskCreateEDFWithStack( vPeriodicWorkerSRP,
-                                           pcName,
-                                           SRP100_STACK_WORDS,
-                                           &xTaskParams[ i ],
+        xResult = xTaskCreateEDFWithStack( vPeriodicWorkerSRP, pcName,
+                                           SRP100_STACK_WORDS, &xTaskParams[ i ],
                                            xT, xD, xC,
                                            xSharedStacks[ iGroup ],
                                            &xTaskHandles[ i ] );
@@ -411,6 +399,10 @@ static void prvBuildTasksModeOn( void )
         if( xResult == pdPASS )
         {
             uxAccepted++;
+            if( xTaskParams[ i ].iPin >= 0 )
+            {
+                prvTraceRegister( xTaskHandles[ i ], ( uint ) xTaskParams[ i ].iPin );
+            }
         }
         else
         {
@@ -426,26 +418,24 @@ static void prvBuildTasksModeOn( void )
 }
 #endif /* configSRP_STACK_SHARING == 1 */
 
-/* ---- Entry point ------------------------------------------------------ */
-
+/* ---- Entry point ---- */
 void main_edf_test( void )
 {
     int i;
 
-    /* Give the USB-CDC serial port a moment to enumerate so that the
-     * admission traces emitted during task creation are visible in the
-     * host terminal (Mode OFF symptom: no early traces otherwise). */
     sleep_ms( 2000 );
 
-    /* GPIO for the per-group monitored pins. */
+    /* Initialise all GPIO pins. */
     for( i = 0; i < SRP100_GROUPS; i++ )
     {
         gpio_init( ( uint ) piGroupMonitorPins[ i ] );
         gpio_set_dir( ( uint ) piGroupMonitorPins[ i ], GPIO_OUT );
         gpio_put( ( uint ) piGroupMonitorPins[ i ], 0 );
     }
+    gpio_init( PIN_IDLE );  gpio_set_dir( PIN_IDLE,  GPIO_OUT ); gpio_put( PIN_IDLE,  0 );
+    gpio_init( PIN_TIMER ); gpio_set_dir( PIN_TIMER, GPIO_OUT ); gpio_put( PIN_TIMER, 0 );
 
-    /* ---- Create SRP resources (2 units each) ---- */
+    /* Create SRP resources. */
     xR1 = xSRPResourceCreate( 2U );
     xR2 = xSRPResourceCreate( 2U );
     xR3 = xSRPResourceCreate( 2U );
@@ -455,7 +445,7 @@ void main_edf_test( void )
     configASSERT( xR3 != NULL );
     configASSERT( xR4 != NULL );
 
-    /* ---- Register SRP resource users BEFORE task creation ----          */
+    /* Register SRP resource users. */
     for( i = 0; i < 3; i++ )
         vSRPResourceRegisterUser( xR1, prvLevel( pdMS_TO_TICKS( 8000 ) ), 1U, pdMS_TO_TICKS( 2 ) );
     for( i = 0; i < 3; i++ )
@@ -467,31 +457,27 @@ void main_edf_test( void )
     for( i = 0; i < 3; i++ )
         vSRPResourceRegisterUser( xR1, prvLevel( pdMS_TO_TICKS( 4000 ) ), 1U, pdMS_TO_TICKS( 2 ) );
 
-    /* ---- Banner ---- */
     printf( "\r\n" );
     printf( "[SRP100] =================================================\r\n" );
     printf( "[SRP100]  SRP Stack-Sharing Demo\r\n" );
     printf( "[SRP100]  configSRP_STACK_SHARING = %d\r\n", configSRP_STACK_SHARING );
+    printf( "[SRP100]  Pin map: Groups A..E -> GPIO 10,11,12,20,19  IDLE -> 13  TIMER -> 18\r\n" );
     printf( "[SRP100] =================================================\r\n" );
 
-    /* ---- Heap snapshot before task creation ---- */
     xHeapBeforeCreate = xPortGetFreeHeapSize();
     printf( "[SRP100] Heap free before task creation: %u bytes\r\n",
             ( unsigned ) xHeapBeforeCreate );
 
-    /* ---- Build the task set for this mode ---- */
 #if ( configSRP_STACK_SHARING == 1 )
     prvBuildTasksModeOn();
 #else
     prvBuildTasksModeOff();
 #endif
 
-    /* ---- Heap snapshot after task creation ---- */
     xHeapAfterCreate = xPortGetFreeHeapSize();
     {
         size_t xConsumed = ( xHeapBeforeCreate > xHeapAfterCreate )
-                         ? ( xHeapBeforeCreate - xHeapAfterCreate )
-                         : 0U;
+                         ? ( xHeapBeforeCreate - xHeapAfterCreate ) : 0U;
         printf( "[SRP100] Heap free  after task creation: %u bytes\r\n",
                 ( unsigned ) xHeapAfterCreate );
         printf( "[SRP100] Heap consumed by %d tasks   : %u bytes  (~%u bytes/task)\r\n",
@@ -503,8 +489,6 @@ void main_edf_test( void )
 #endif
     }
 
-    /* Monitor task prints the full quantitative report after the task set
-     * has had time to stabilise (HWM settles, deadlines are met, etc.). */
     ( void ) xTaskCreate( vMonitorTask, "MON", 512, NULL,
                           tskIDLE_PRIORITY + 1U, NULL );
 
