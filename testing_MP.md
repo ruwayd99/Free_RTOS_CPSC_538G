@@ -118,6 +118,10 @@ This program validates the partitioned EDF admission path using a fit/reject sce
 **Expected result:**
 The five moderate tasks are admitted and placed across the two cores. The oversized task is rejected because no core has enough remaining capacity.
 
+Logic analyzer expected output:
+![SMP partition fit actual output](test_results/images/smp-partition-fit-ideal.jpg)
+Again, the red/blue/green stripes indicate job timing and how they correspond to idle task execution.
+
 **Pass criterion:**
 - Five tasks are admitted.
 - One task is rejected.
@@ -128,7 +132,7 @@ The five moderate tasks are admitted and placed across the two cores. The oversi
 - The printed summary confirms `admitted=5 rejected=1`.
 - Accepted tasks continue periodic release/finish behavior in the captured run.
 
-![SMP partition fit actual output](test_results/images/smp_partition_fit_actual.png)
+![SMP partition fit actual output](test_results/images/smp-partition-fit.png)
 
 ---
 
@@ -147,6 +151,9 @@ This test validates the partitioned migration and remove-from-core APIs. It demo
 **Expected result:**
 The first migration should fail because core 0 is already carrying a large task. After `P_A_U70` is removed from its fixed core, the second migration should succeed.
 
+Logic analyzer expected output:
+![SMP partition fit actual output](test_results/images/smp-partition-migrate-ideal.jpg)
+
 **Pass criterion:**
 - The first migration request returns failure.
 - The controller reports that `P_A_U70` was removed from core assignment.
@@ -157,7 +164,7 @@ The first migration should fail because core 0 is already carrying a large task.
 - The controller then logs removal of `P_A_U70` from core assignment.
 - The second migration logs success: `migrate B->core0 after remove expect pass result=1`, and worker output then shows `P_B_U40` running on core 0.
 
-![SMP partition migration actual output](test_results/images/smp_partition_migration_actual.png)
+![SMP partition migration actual output](test_results/images/smp-partition-migrate.png)
 
 ## 4. Coverage Summary
 
