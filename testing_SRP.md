@@ -36,13 +36,30 @@ preemption level and computed `B`. Combined with the inherited
 `[EDF][admit|finish|release|drop]` lines, this is the primary source
 of truth.
 
-**GPIO per task.** Each demo task raises its pin while doing work and
-lowers it before blocking so the same convention as the EDF tests. A task that is waiting at the SRP gate keeps its
-pin low: visually, a ceiling-blocked task looks like a dead pulse.
+**GPIO per task.** Pin transitions are driven by context-switch hooks
+(`traceTASK_SWITCHED_IN` / `traceTASK_SWITCHED_OUT`) rather than
+manual in-task GPIO writes, so analyzer pulses represent actual CPU
+residency. A task that is waiting at the SRP gate keeps its pin low:
+visually, a ceiling-blocked task looks like a dead pulse.
 
 **Heap/HWM readout (`main_srp_test_100.c`).** The `vMonitorTask`
 prints `xPortGetFreeHeapSize()` before and after task creation, then
 walks every TCB and reports `uxTaskGetStackHighWaterMark` per group.
+
+### 1.3 Logic-analyzer setup (SRP)
+
+Common single-core system-task channels in SRP tests:
+- Idle task: GPIO 20
+- Timer daemon task: GPIO 21
+
+Workload channels by test:
+- `main_srp_test_dynamic.c`: `T1`=10, `T2`=11, `T3`=12, `T4`=13, `T5_RT_OK`=18, `T6_OVERLOAD`=19 (expected to stay low when rejected).
+- `main_srp_test_100.c`: group channels are GPIO 10,11,12,13,18 (one representative task per group).
+
+Expected pin behavior:
+- SRP-admitted workload tasks pulse periodically, with visible blocking gaps when ceiling constraints prevent entry.
+- Rejected runtime overload tasks stay low throughout capture.
+- GPIO 20 should indicate idle windows; GPIO 21 should show short timer-daemon activations.
 
 ### 1.3 Running a test
 
@@ -127,8 +144,9 @@ accepted. The admission lines show each task's computed
   does not create a TCB: PIN_T6 stays LOW for the entire run, which
   is the visible proof on the logic analyzer.
 
-### 2.6 Expected output (excerpt)
+### 2.6 Expected output
 
+Serial output
 ```
 [SRP-DYN] resources: R1(4u) R2(3u) R3(2u)
 [SRP-DYN] creating 4 startup tasks...
@@ -146,10 +164,16 @@ accepted. The admission lines show each task's computed
 [SRP-DYN][orch] OVERLOAD -> REJECT admitted=5 rejected=1
 ```
 
+Logic analzyer expectation
+![SRP dynamic expected output](test_results/images/srp-dynamic-ideal.jpg)
+
+
 ### 2.7 Result
 
 **PASS.** 5 accepts, 1 reject, no drops, no deadlocks. GPIO pins
-10–13 and 21 pulse periodically; pin 23 (OVERLOAD) stays low.
+10–13 and 18 pulse periodically; pin 19 (OVERLOAD) stays low.
+
+![SRP dynamic actual output](test_results/images/srp-dynamic.png)
 
 ---
 
@@ -276,6 +300,8 @@ Note we did not add the projected heap usage for with stack sharing (which is wh
 consumed for stacks. Mode ON: 100 admits, 0 rejects, ~28 KB heap +
 3.8 KB `.bss`, ~66% savings depending on how you account for the
 snapshot buffers.
+
+![SRP 100-task actual output](test_results/images/srp-100.png)
 
 ---
 

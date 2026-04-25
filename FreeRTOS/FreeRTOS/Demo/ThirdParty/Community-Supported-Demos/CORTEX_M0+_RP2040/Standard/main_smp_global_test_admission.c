@@ -119,27 +119,16 @@ void main_edf_test( void )
     TaskHandle_t xHandleB = NULL;
     TaskHandle_t xHandleC = NULL;
     TaskHandle_t xHandleReject = NULL;
-    SMPGlobalAdmissionParams_t * pxTaskParams[] =
-    {
-        &xTaskAParams,
-        &xTaskBParams,
-        &xTaskCParams,
-        &xTaskRejectParams
-    };
+    const uint auLogicAnalyzerPins[] = { 10, 11, 12, 13, 18, 19, 20, 21 };
     size_t xIndex;
 
-    for( xIndex = 0; xIndex < ( sizeof( pxTaskParams ) / sizeof( pxTaskParams[ 0 ] ) ); xIndex++ )
+    /* Always initialise the full 8-channel logic-analyzer pin set. */
+    for( xIndex = 0; xIndex < ( sizeof( auLogicAnalyzerPins ) / sizeof( auLogicAnalyzerPins[ 0 ] ) ); xIndex++ )
     {
-        if( ( pxTaskParams[ xIndex ] != NULL ) && ( pxTaskParams[ xIndex ]->iPin >= 0 ) )
-        {
-            gpio_init( ( uint ) pxTaskParams[ xIndex ]->iPin );
-            gpio_set_dir( ( uint ) pxTaskParams[ xIndex ]->iPin, GPIO_OUT );
-            gpio_put( ( uint ) pxTaskParams[ xIndex ]->iPin, 0 );
-        }
+        gpio_init( auLogicAnalyzerPins[ xIndex ] );
+        gpio_set_dir( auLogicAnalyzerPins[ xIndex ], GPIO_OUT );
+        gpio_put( auLogicAnalyzerPins[ xIndex ], 0 );
     }
-    gpio_init( PIN_IDLE0 ); gpio_set_dir( PIN_IDLE0, GPIO_OUT ); gpio_put( PIN_IDLE0, 0 );
-    gpio_init( PIN_IDLE1 ); gpio_set_dir( PIN_IDLE1, GPIO_OUT ); gpio_put( PIN_IDLE1, 0 );
-    gpio_init( PIN_TIMER ); gpio_set_dir( PIN_TIMER, GPIO_OUT ); gpio_put( PIN_TIMER, 0 );
 
     printf( "[SMP][GLOBAL][admission] creating 3 admitted + 1 rejected implicit-deadline tasks\r\n" );
     printf( "[SMP][GLOBAL][admission] pin map: A=%d B=%d C=%d REJECT=%d IDLE0=%d IDLE1=%d TIMER=%d\r\n",

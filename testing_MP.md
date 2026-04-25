@@ -6,10 +6,30 @@ The SMP test suite is split into four discrete executables. Two tests exercise g
 
 Each test uses the same observation pattern:
 
-1. GPIO pins show which task is currently executing.
+1. GPIO pins are toggled by context-switch hooks (`traceTASK_SWITCHED_IN` / `traceTASK_SWITCHED_OUT`) instead of in-task sequential `gpio_put()` calls.
 2. `printf()` traces record admission results, core changes, and timing.
 3. `xTaskGetTickCount()` is used to anchor migration and removal events in time.
 4. The RP2040 dual-core setup validates the SMP-specific code paths rather than a single-core fallback.
+
+### 1.1 Logic-analyzer setup (SMP)
+
+SMP system-task channels are shared across all SMP tests:
+- Core 0 idle task: GPIO 19
+- Core 1 idle task: GPIO 20
+- Timer daemon task: GPIO 21
+
+Idle ordering has been verified from the current source registration order: `xTaskGetIdleTaskHandleForCore(0)` is mapped to GPIO 19, and `xTaskGetIdleTaskHandleForCore(1)` is mapped to GPIO 20.
+
+Workload channels by test:
+- `main_smp_global_test_admission.c`: `G_A`=10, `G_B`=11, `G_C`=12, `G_REJECT`=13.
+- `main_smp_global_test_migration.c`: `G_HINT`=10, `G_PEER`=11.
+- `main_smp_partition_test_fit.c`: `P_U40`=10, `P_U30A`=11, `P_U30B`=12, `P_U25A`=13, `P_U25B`=18.
+- `main_smp_partition_test_migration.c`: `P_A_U70`=10, `P_B_U40`=11.
+
+Expected pin behavior:
+- Workload pins should pulse while their tasks are running and show migration-related movement only in the migration tests.
+- GPIO 19 and 20 should indicate idle residency on core 0 and core 1 respectively when those cores have no runnable EDF work.
+- GPIO 21 should show brief timer-daemon activity bursts.
 
 ## 2. Global EDF Tests
 
@@ -29,6 +49,10 @@ This program verifies that the global EDF admission path accepts a schedulable t
 **Expected result:**
 The first three tasks are admitted and continue to run periodically. The final task is rejected because it makes the task set unschedulable under the global EDF admission test.
 
+Logic analyzer output:
+![SMP global admission expected output](test_results/images/smp-global-admission-ideal.jpg)
+Note that the blue and red stripes indicate timing of job runs & corresponding dips in idle task execution
+
 **Pass criterion:**
 - `uxTaskGetEDFAdmittedCount()` reaches 3.
 - `uxTaskGetEDFRejectedCount()` increments for the rejection case.
@@ -38,6 +62,8 @@ The first three tasks are admitted and continue to run periodically. The final t
 - The log shows `G_A`, `G_B`, and `G_C` admitted, and `G_REJECT` rejected by global GFB admission.
 - The startup summary reports `admitted=3 rejected=1`.
 - Admitted tasks continue to release and finish periodically for the remainder of the captured output.
+
+![SMP global admission actual output](test_results/images/smp-global-admission.png)
 
 ---
 
@@ -56,6 +82,11 @@ This test validates the runtime migration and release APIs in global EDF mode. A
 **Expected result:**
 The migration request should succeed and the hinted task should become eligible to run on the new core. Removing the peer task from its core assignment should release it back into the global pool.
 
+Logic analyzer output:
+![SMP global migration expected output](test_results/images/smp-global-migrate-ideal.jpg)
+Note again that blue stripes indicate task timing. 
+
+
 **Pass criterion:**
 - The controller prints a successful migration result.
 - The worker trace eventually shows `G_HINT` on core 1.
@@ -65,6 +96,8 @@ The migration request should succeed and the hinted task should become eligible 
 - The controller logs `migrate hinted->core1 result=1`, then worker output later confirms `G_HINT` running on core 1.
 - The controller logs removal of `G_PEER` from scheduling.
 - After removal, only `G_HINT` continues periodic releases/finishes, with no crash observed.
+
+![SMP global migration actual output](test_results/images/smp-global-migrate.png)
 
 ## 3. Partitioned EDF Tests
 
@@ -95,6 +128,8 @@ The five moderate tasks are admitted and placed across the two cores. The oversi
 - The printed summary confirms `admitted=5 rejected=1`.
 - Accepted tasks continue periodic release/finish behavior in the captured run.
 
+![SMP partition fit actual output](test_results/images/smp_partition_fit_actual.png)
+
 ---
 
 ### Test 4: Partitioned migration and capacity release
@@ -121,6 +156,8 @@ The first migration should fail because core 0 is already carrying a large task.
 - The first migration attempt logs failure as expected: `migrate B->core0 expect fail result=0`.
 - The controller then logs removal of `P_A_U70` from core assignment.
 - The second migration logs success: `migrate B->core0 after remove expect pass result=1`, and worker output then shows `P_B_U40` running on core 0.
+
+![SMP partition migration actual output](test_results/images/smp_partition_migration_actual.png)
 
 ## 4. Coverage Summary
 

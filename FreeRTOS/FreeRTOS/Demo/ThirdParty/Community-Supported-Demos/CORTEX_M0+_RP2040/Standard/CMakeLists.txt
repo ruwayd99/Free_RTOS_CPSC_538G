@@ -154,11 +154,6 @@ add_single_test_bin(main_edf_test_100
 ###############################################################################################
 #                                       SRP
 ###############################################################################################
-# SRP basic test (existing test from Assignment 2)
-add_single_test_bin(main_srp_test
-        mainCREATE_EDF_TEST=1
-        ${SRP_COMMON_DEFS})
-
 # SRP dynamic test (3 multi-unit resources, nested access, runtime admit/reject)
 add_single_test_bin(main_srp_test_dynamic
         mainCREATE_EDF_TEST=1

@@ -425,15 +425,16 @@ void main_edf_test( void )
 
     sleep_ms( 2000 );
 
-    /* Initialise all GPIO pins. */
-    for( i = 0; i < SRP100_GROUPS; i++ )
+    /* Always initialise the full 8-channel logic-analyzer pin set. */
     {
-        gpio_init( ( uint ) piGroupMonitorPins[ i ] );
-        gpio_set_dir( ( uint ) piGroupMonitorPins[ i ], GPIO_OUT );
-        gpio_put( ( uint ) piGroupMonitorPins[ i ], 0 );
+        const uint auLogicAnalyzerPins[] = { 10, 11, 12, 13, 18, 19, 20, 21 };
+        for( i = 0; i < ( int ) ( sizeof( auLogicAnalyzerPins ) / sizeof( auLogicAnalyzerPins[ 0 ] ) ); i++ )
+        {
+            gpio_init( auLogicAnalyzerPins[ i ] );
+            gpio_set_dir( auLogicAnalyzerPins[ i ], GPIO_OUT );
+            gpio_put( auLogicAnalyzerPins[ i ], 0 );
+        }
     }
-    gpio_init( PIN_IDLE );  gpio_set_dir( PIN_IDLE,  GPIO_OUT ); gpio_put( PIN_IDLE,  0 );
-    gpio_init( PIN_TIMER ); gpio_set_dir( PIN_TIMER, GPIO_OUT ); gpio_put( PIN_TIMER, 0 );
 
     /* Create SRP resources. */
     xR1 = xSRPResourceCreate( 2U );

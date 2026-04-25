@@ -3,10 +3,10 @@
 /*
  * Dynamic multi-task CBS test.  All 8 logic-analyzer channels are used:
  *
- *   10 PERIODIC_10  11 PERIODIC_11  12 PERIODIC_12  13 PERIODIC_13
- *      (subsequent periodic tasks added at runtime)
- *   18 CBS_0        19 CBS_1
- *      (initial CBS tasks; CBS_2 and CBS_3 added later have no GPIO pin)
+ *   10 PERIODIC_10  11 PERIODIC_11
+ *      (only first 2 subsequent periodic tasks are visible)
+ *   12 CBS_0        13 CBS_1        18 CBS_2        19 CBS_3
+ *      (all 4 CBS tasks are visible)
  *   20 IDLE         21 TIMER
  *
  * The last two pins (20, 21) are reserved for the system tasks so that
@@ -18,13 +18,13 @@
 #include "timers.h"
 #include "pico/stdlib.h"
 
-#define PIN_PERIODIC_SUB_BASE  10   /* subsequent periodic tasks: 10..13 */
-#define PIN_CBS_BASE           18   /* CBS_0=18, CBS_1=19 (CBS_2,3 no pin) */
+#define PIN_PERIODIC_SUB_BASE  10   /* visible subsequent periodic tasks: 10..11 */
 #define PIN_IDLE               20
 #define PIN_TIMER              21
 
 #define NUM_PERIODIC_TASKS_INITIAL    10
 #define NUM_PERIODIC_TASKS_SUBSEQUENT  4
+#define NUM_PERIODIC_SUBSEQUENT_VISIBLE 2
 #define PERIODIC_SUBSEQUENT_DISPATCH_DELAY_MS  2000
 
 #define NUM_CBS_TASKS_INITIAL    2
@@ -115,13 +115,15 @@ static volatile TickType_t xLastCBSStartTick  [ NUM_CBS_TASKS_TOTAL ]     = { 0U
 static volatile TickType_t xLastCBSEndTick    [ NUM_CBS_TASKS_TOTAL ]     = { 0U };
 static volatile uint32_t   ulNextCBSToTrigger = 0U;
 
+static const uint xCBSPins[ NUM_CBS_TASKS_TOTAL ] = { 12U, 13U, 18U, 19U };
+
 /* ---- Helpers ------------------------------------------------------------- */
 /* Returns the GPIO pin for a subsequent periodic task, or -1 for initial ones.
  * Only subsequent tasks (indices NUM_PERIODIC_TASKS_INITIAL .. total-1) get pins. */
 static BaseType_t prvGetPeriodicPinFromIndex( int idx, uint * pinOut )
 {
     if( ( idx >= ( int ) NUM_PERIODIC_TASKS_INITIAL ) &&
-        ( idx < ( int ) NUM_PERIODIC_TASKS_TOTAL ) )
+        ( idx < ( int ) ( NUM_PERIODIC_TASKS_INITIAL + NUM_PERIODIC_SUBSEQUENT_VISIBLE ) ) )
     {
         *pinOut = PIN_PERIODIC_SUB_BASE + ( uint ) ( idx - ( int ) NUM_PERIODIC_TASKS_INITIAL );
         return pdTRUE;
@@ -129,12 +131,12 @@ static BaseType_t prvGetPeriodicPinFromIndex( int idx, uint * pinOut )
     return pdFALSE;
 }
 
-/* Only CBS_0 and CBS_1 get GPIO pins; CBS_2 and CBS_3 have no pin. */
+/* All CBS tasks get GPIO pins. */
 static BaseType_t prvGetCBSPinFromIndex( int idx, uint * pinOut )
 {
-    if( ( idx >= 0 ) && ( idx < NUM_CBS_TASKS_INITIAL ) )
+    if( ( idx >= 0 ) && ( idx < ( int ) NUM_CBS_TASKS_TOTAL ) )
     {
-        *pinOut = PIN_CBS_BASE + ( uint ) idx;
+        *pinOut = xCBSPins[ idx ];
         return pdTRUE;
     }
     return pdFALSE;
@@ -244,7 +246,7 @@ static void vPeriodicTriggerTask( void * pvParameters )
             }
         }
 
-        /* Add subsequent CBS tasks (CBS_2 and CBS_3 have no GPIO pin). */
+        /* Add subsequent CBS tasks (CBS_2 and CBS_3 are now visible on GPIO). */
         if( i < NUM_CBS_TASKS_SUBSEQUENT )
         {
             int cbsIdx = NUM_CBS_TASKS_INITIAL + i;
@@ -256,7 +258,16 @@ static void vPeriodicTriggerTask( void * pvParameters )
                                           pdMS_TO_TICKS( CBS_BUDGET_MS ),
                                           pdMS_TO_TICKS( CBS_PERIOD_MS ),
                                           &xCBSTaskHandles[ cbsIdx ] ) == pdPASS );
-            /* No GPIO pin for CBS_2 / CBS_3 – those pin numbers are now idle/timer. */
+
+            {
+                uint pin;
+                if( prvGetCBSPinFromIndex( cbsIdx, &pin ) != pdFALSE )
+                {
+                    taskENTER_CRITICAL();
+                    prvTraceRegister( xCBSTaskHandles[ cbsIdx ], pin );
+                    taskEXIT_CRITICAL();
+                }
+            }
         }
     }
 
@@ -270,32 +281,26 @@ void main_cbs_test( void )
 {
     stdio_init_all();
 
-    /* Initialise all 8 GPIO pins up-front. */
-    for( int i = 0; i < NUM_PERIODIC_TASKS_SUBSEQUENT; i++ )
+    /* Initialise all 8 logic-analyzer pins up-front. */
     {
-        gpio_init( PIN_PERIODIC_SUB_BASE + ( uint ) i );
-        gpio_set_dir( PIN_PERIODIC_SUB_BASE + ( uint ) i, GPIO_OUT );
-        gpio_put( PIN_PERIODIC_SUB_BASE + ( uint ) i, 0 );
+        const uint auLogicAnalyzerPins[] = { 10, 11, 12, 13, 18, 19, 20, 21 };
+        for( int i = 0; i < ( int ) ( sizeof( auLogicAnalyzerPins ) / sizeof( auLogicAnalyzerPins[ 0 ] ) ); i++ )
+        {
+            gpio_init( auLogicAnalyzerPins[ i ] );
+            gpio_set_dir( auLogicAnalyzerPins[ i ], GPIO_OUT );
+            gpio_put( auLogicAnalyzerPins[ i ], 0 );
+        }
     }
-    for( int i = 0; i < NUM_CBS_TASKS_INITIAL; i++ )
-    {
-        gpio_init( PIN_CBS_BASE + ( uint ) i );
-        gpio_set_dir( PIN_CBS_BASE + ( uint ) i, GPIO_OUT );
-        gpio_put( PIN_CBS_BASE + ( uint ) i, 0 );
-    }
-    gpio_init( PIN_IDLE );  gpio_set_dir( PIN_IDLE,  GPIO_OUT ); gpio_put( PIN_IDLE,  0 );
-    gpio_init( PIN_TIMER ); gpio_set_dir( PIN_TIMER, GPIO_OUT ); gpio_put( PIN_TIMER, 0 );
 
     printf( "[CBS TEST] \n" );
     printf( "[CBS TEST] Starting with %d periodic tasks.\n", NUM_PERIODIC_TASKS_INITIAL );
     printf( "[CBS TEST] Starting with %d CBS tasks.\n", NUM_CBS_TASKS_INITIAL );
     printf( "[CBS TEST] Version 2.\n" );
-    printf( "[CBS TEST] Pin map: subsequent PERIODIC_%d..%d -> GPIO %d..%d, "
-            "CBS_0..1 -> GPIO %d..%d, IDLE -> GPIO %d, TIMER -> GPIO %d\n",
-            NUM_PERIODIC_TASKS_INITIAL, NUM_PERIODIC_TASKS_TOTAL - 1,
-            PIN_PERIODIC_SUB_BASE, PIN_PERIODIC_SUB_BASE + NUM_PERIODIC_TASKS_SUBSEQUENT - 1,
-            PIN_CBS_BASE, PIN_CBS_BASE + NUM_CBS_TASKS_INITIAL - 1,
-            PIN_IDLE, PIN_TIMER );
+        printf( "[CBS TEST] Pin map: PERIODIC_%d..%d -> GPIO 10..11, CBS_0..3 -> GPIO 12,13,18,19, IDLE -> GPIO %d, TIMER -> GPIO %d\n",
+            NUM_PERIODIC_TASKS_INITIAL,
+            NUM_PERIODIC_TASKS_INITIAL + NUM_PERIODIC_SUBSEQUENT_VISIBLE - 1,
+            PIN_IDLE,
+            PIN_TIMER );
 
     /* Initial periodic tasks (no GPIO – too many to show). */
     for( int i = 0; i < NUM_PERIODIC_TASKS_INITIAL; ++i )

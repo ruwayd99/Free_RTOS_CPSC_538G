@@ -151,14 +151,13 @@ void main_edf_test( void )
     const TickType_t xBgDeadline = pdMS_TO_TICKS( 6000 );
     const TickType_t xBgWCET = pdMS_TO_TICKS( 500 );
 
-    gpio_init( PIN_TASK_LOW );
-    gpio_set_dir( PIN_TASK_LOW, GPIO_OUT );
-    gpio_init( PIN_TASK_HIGH );
-    gpio_set_dir( PIN_TASK_HIGH, GPIO_OUT );
-    gpio_init( PIN_TASK_BG );
-    gpio_set_dir( PIN_TASK_BG, GPIO_OUT );
-    gpio_init( PIN_TASK_RUNTIME );
-    gpio_set_dir( PIN_TASK_RUNTIME, GPIO_OUT );
+    const uint auLogicAnalyzerPins[] = { 10, 11, 12, 13, 18, 19, 20, 21 };
+    for( int i = 0; i < ( int ) ( sizeof( auLogicAnalyzerPins ) / sizeof( auLogicAnalyzerPins[ 0 ] ) ); i++ )
+    {
+        gpio_init( auLogicAnalyzerPins[ i ] );
+        gpio_set_dir( auLogicAnalyzerPins[ i ], GPIO_OUT );
+        gpio_put( auLogicAnalyzerPins[ i ], 0 );
+    }
 
     xSharedResource = xSRPResourceCreate( 1U );
     configASSERT( xSharedResource != NULL );

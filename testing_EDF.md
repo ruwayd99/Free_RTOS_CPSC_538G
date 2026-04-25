@@ -31,16 +31,34 @@ the tick count. That is the primary source of truth. Each event is
 tagged (`[EDF][admit]`, `[EDF][finish]`, `[EDF][release]`,
 `[EDF][drop]`) so a cold reader can follow the timeline.
 
-**GPIO pulse per task (logic analyzer)**: every workload task raises
-one pin while doing CPU work and lowers it before blocking. The width
-of the pulse is the job's actual execution time; the gap is the
-inter-release gap. This is what proves in an oscilloscope-visible way
-that deadlines are not being missed under nominal load and that EDF
-preemption is happening in the right order.
+**GPIO pulse per task (logic analyzer)**: pins are toggled from
+`traceTASK_SWITCHED_IN` / `traceTASK_SWITCHED_OUT` hooks, so each
+pulse directly represents task residency on CPU during context
+switches rather than manual per-task `gpio_put()` calls. The pulse
+width still corresponds to effective run time and the gap corresponds
+to blocked/waiting intervals. This is what proves in an
+oscilloscope-visible way that EDF preemption is happening in the right
+order.
 
 The logic analyzer we used has 8 channels; the three tests use pins
 `10,11,12,13,18,19,20,21` so the same physical harness works across
 all of them.
+
+### Logic-analyzer setup (EDF)
+
+Common single-core system-task channels in EDF tests:
+- Idle task: GPIO 20
+- Timer daemon task: GPIO 21
+
+Workload channels by test binary:
+- `main_edf_test.c`: `IMPLICIT_A`=10, `CONSTR_B`=11, `RT_ADD_OK`=12, `RT_ADD_REJECT`=13 (stays low if rejected).
+- `main_edf_test_dynamic.c`: `IMPL1`=10, `IMPL2`=11, `CONS1`=12, `CONS2`=13, `IMPL4_OVERLOAD`=18 (expected reject), `IMPL5_LATE_OK`=19.
+- `main_edf_test_100.c`: sampled workload channels on GPIO 10,11,12,13,18,19; idle/timer remain on 20/21.
+
+Expected pin behavior:
+- Accepted EDF tasks show periodic high pulses with cadence tied to their configured periods.
+- Rejected runtime candidates remain low for the entire capture window.
+- GPIO 20 (idle) is high mainly during slack intervals; GPIO 21 (timer daemon) appears as short service bursts.
 
 ### 1.3 Running a test
 
@@ -109,8 +127,9 @@ test.
   candidate without corrupting the already-accepted set (the two
   startup tasks keep running with no `[EDF][drop]` lines).
 
-### 2.4 Expected output (excerpt)
+### 2.4 Expected output 
 
+Serial output:
 ```
 [EDF][startup] Creating initial task set...
 [EDF][admit] IMPLICIT_A T=5000 D=4000 C=1000  ACCEPT (constrained DBF<=t)
@@ -123,10 +142,18 @@ test.
 GPIO 10 and 11 pulse from the start; GPIO 12 begins pulsing at
 `t ≈ 5 s`; GPIO 13 never pulses (its TCB was never created).
 
+
+Logic analyzer expected output:
+![EDF baseline expected output](test_results/images/edf-basic-ideal.jpg)
+
+
 ### 2.5 Result
 
 **PASS.** Two accepts at startup, one accept and one reject at
 runtime, zero drops.
+
+Logic analyzer output:
+![EDF baseline actual output](test_results/images/edf-basic.png)
 
 ---
 
@@ -173,8 +200,9 @@ candidates:
 * Counters `uxTaskGetEDFAdmittedCount` and `uxTaskGetEDFRejectedCount`
   match the visible trace (printed by `prvLogCounters`).
 
-### 3.4 Expected output (excerpt)
+### 3.4 Expected output
 
+Serial output:
 ```
 [DYN][startup] impl1=1 impl2=1 impl3=1 cons1=1 cons2=1 cons3=1 orch=1 admitted=6
 ...
@@ -191,10 +219,16 @@ from `t=0`; no additional pin lights up after `t=8s` because
 `IMPL4_OVERLOAD` was rejected (no TCB) and `IMPL5_LATE_OK` uses
 `PIN_CONS4=18` which is accepted.
 
+
+Logic analyzer expected output:
+![EDF dynamic expected output](test_results/images/edf-dynamic-ideal.jpg)
+
 ### 3.5 Result
 
 **PASS.** `admitted = 6`, then `admitted = 7`, `rejected = 1`, zero
 `[EDF][drop]` lines.
+
+![EDF dynamic actual output](test_results/images/edf-dynamic.png)
 
 ---
 
@@ -254,10 +288,15 @@ On the analyzer, the eight sampled pins pulse with 4 ms-wide high
 phases at an 8 s period — small but clearly visible, and staggered
 exactly as EDF ordering predicts.
 
+![EDF 100-task actual output](test_results/images/edf-100-ideal.jpg)
+
+
 ### 4.5 Result
 
 **PASS.** `accepted = 100`, `rejected = 0`, monitor steady at 100, no
 drops.
+
+![EDF 100-task actual output](test_results/images/edf-100.png)
 
 ---
 

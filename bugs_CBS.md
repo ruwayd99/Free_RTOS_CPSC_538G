@@ -35,3 +35,21 @@ Suspending a CBS task via `vTaskSuspend()` and later resuming it may not refresh
 - CBS task resumed
 
 **Impact:** Not observed; not a typical use case (suspension usually for debugging)
+
+---
+
+### 4. **Unexplained short spikes on idle-task channel**
+Occasional short pulses are visible on the idle-task GPIO trace where idle goes HIGH while workload tasks appear active, or goes LOW when the system appears to be idle.
+
+**Observed Behavior:**
+- Idle pin briefly spikes HIGH during what looks like task execution windows.
+- Idle pin briefly dips LOW during windows that otherwise appear idle.
+
+**Possible causes:**
+- CBS budget refresh/reset or deadline update can cause a brief scheduler handoff where the currently running task is switched out momentarily.
+- Accidental context switches caused by extra yields, notifications, or critical-section boundaries in test/orchestrator code.
+- Logic-analyzer sampling limitation: a short timer-daemon run may not be cleanly captured on its own channel, showing up as an apparent pause on idle.
+- Trace hook transition skew: `traceTASK_SWITCHED_OUT`/`IN` toggles are not perfectly simultaneous at the waveform level, causing narrow transient artifacts.
+
+**Impact:**
+- Primarily a trace-interpretation issue; no corresponding functional failures (crash, deadlock, or missed admissions) were observed in normal test logs.

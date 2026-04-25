@@ -16,7 +16,7 @@
 #include "pico/stdlib.h"
 
 #define PIN_PERIODIC_BASE   10
-#define PIN_CBS_TASK        11
+#define PIN_CBS_TASK        13
 #define NUM_PERIODIC_TASKS  3
 
 #define PERIODIC_PERIOD_MS   1000
@@ -183,16 +183,14 @@ void main_cbs_test( void )
 
     stdio_init_all();
 
-    /* Initialise all GPIO pins before the scheduler starts. */
-    for( i = 0; i < NUM_PERIODIC_TASKS; i++ )
+    /* Always initialise the full 8-channel logic-analyzer pin set. */
+    const uint auLogicAnalyzerPins[] = { 10, 11, 12, 13, 18, 19, 20, 21 };
+    for( i = 0; i < ( int ) ( sizeof( auLogicAnalyzerPins ) / sizeof( auLogicAnalyzerPins[ 0 ] ) ); i++ )
     {
-        gpio_init( ( uint ) ( PIN_PERIODIC_BASE + i ) );
-        gpio_set_dir( ( uint ) ( PIN_PERIODIC_BASE + i ), GPIO_OUT );
-        gpio_put( ( uint ) ( PIN_PERIODIC_BASE + i ), 0 );
+        gpio_init( auLogicAnalyzerPins[ i ] );
+        gpio_set_dir( auLogicAnalyzerPins[ i ], GPIO_OUT );
+        gpio_put( auLogicAnalyzerPins[ i ], 0 );
     }
-    gpio_init( PIN_CBS_TASK ); gpio_set_dir( PIN_CBS_TASK, GPIO_OUT ); gpio_put( PIN_CBS_TASK, 0 );
-    gpio_init( PIN_IDLE );     gpio_set_dir( PIN_IDLE,     GPIO_OUT ); gpio_put( PIN_IDLE,     0 );
-    gpio_init( PIN_TIMER );    gpio_set_dir( PIN_TIMER,    GPIO_OUT ); gpio_put( PIN_TIMER,    0 );
 
     printf( "[CBS TEST] \n" );
     printf( "[CBS TEST] Starting with %d periodic tasks.\n", NUM_PERIODIC_TASKS );

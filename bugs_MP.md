@@ -45,3 +45,20 @@ xTaskCreateEDFOnCore(..., 5, ...);  // Core 5 doesn't exist on RP2040 (only 0-1)
 ```c
 if (!taskVALID_CORE_ID(xCoreID)) return pdFAIL;
 ```
+
+---
+
+### 4. **Unexplained short spikes on idle-task channels**
+In logic-analyzer traces, idle channels can show narrow spikes that seem inconsistent with visible workload execution (idle briefly HIGH while work is active, or briefly LOW while the system looks idle).
+
+**Observed Behavior:**
+- GPIO 19/20 (core 0/1 idle) occasionally show short transients not obvious from the surrounding workload waveform.
+
+**Possible causes:**
+- Brief scheduler handoffs during migration, affinity updates, or cross-core reschedule requests.
+- Accidental context switches triggered by helper/controller code paths (notifications, prints, or timing boundaries).
+- Logic-analyzer capture limitation where very short timer-daemon activity is missed or aliased, appearing as an idle glitch.
+- Per-core trace ordering artifact: switch-out/switch-in GPIO updates on two cores are not phase-aligned, creating sub-sample transients.
+
+**Impact:**
+- Mostly affects waveform readability; no matching runtime instability was observed in the associated SMP log tests.

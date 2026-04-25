@@ -191,10 +191,8 @@ void main_edf_test_previous( void )
 {
     TaskHandle_t xHandle;
 
-    /* Initialise GPIO for all traced pins (task + system). */
-    const uint auPins[] = { PIN_TASK_IMPLICIT, PIN_TASK_CONSTR,
-                            PIN_TASK_RT_OK,    PIN_TASK_RT_REJECT,
-                            PIN_IDLE,          PIN_TIMER };
+    /* Always initialise the full 8-channel logic-analyzer pin set. */
+    const uint auPins[] = { 10, 11, 12, 13, 18, 19, 20, 21 };
     for( size_t i = 0; i < sizeof( auPins ) / sizeof( auPins[ 0 ] ); i++ )
     {
         gpio_init( auPins[ i ] );
