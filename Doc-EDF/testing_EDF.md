@@ -144,7 +144,7 @@ GPIO 10 and 11 pulse from the start; GPIO 12 begins pulsing at
 
 
 Logic analyzer expected output:
-![EDF baseline expected output](test_results/images/edf-basic-ideal.jpg)
+![EDF baseline expected output](images/edf-basic-ideal.jpg)
 
 
 ### 2.5 Result
@@ -153,7 +153,7 @@ Logic analyzer expected output:
 runtime, zero drops.
 
 Logic analyzer output:
-![EDF baseline actual output](test_results/images/edf-basic.png)
+![EDF baseline actual output](images/edf-basic.png)
 
 ---
 
@@ -221,14 +221,14 @@ from `t=0`; no additional pin lights up after `t=8s` because
 
 
 Logic analyzer expected output:
-![EDF dynamic expected output](test_results/images/edf-dynamic-ideal.jpg)
+![EDF dynamic expected output](images/edf-dynamic-ideal.jpg)
 
 ### 3.5 Result
 
 **PASS.** `admitted = 6`, then `admitted = 7`, `rejected = 1`, zero
 `[EDF][drop]` lines.
 
-![EDF dynamic actual output](test_results/images/edf-dynamic.png)
+![EDF dynamic actual output](images/edf-dynamic.png)
 
 ---
 
@@ -288,7 +288,7 @@ On the analyzer, the eight sampled pins pulse with 4 ms-wide high
 phases at an 8 s period — small but clearly visible, and staggered
 exactly as EDF ordering predicts.
 
-![EDF 100-task actual output](test_results/images/edf-100-ideal.jpg)
+![EDF 100-task actual output](images/edf-100-ideal.jpg)
 
 
 ### 4.5 Result
@@ -296,7 +296,7 @@ exactly as EDF ordering predicts.
 **PASS.** `accepted = 100`, `rejected = 0`, monitor steady at 100, no
 drops.
 
-![EDF 100-task actual output](test_results/images/edf-100.png)
+![EDF 100-task actual output](images/edf-100.png)
 
 ---
 

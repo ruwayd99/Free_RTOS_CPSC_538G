@@ -41,7 +41,7 @@ This is the reference CBS scenario. It creates three periodic EDF tasks at start
 The periodic tasks should continue to execute once per period without overrunning their budgets, and the CBS task should only run when notified. Because the combined load is intentionally below 100%, no deadline misses are expected in a correct build.
 
 CBS baseline ideal logic analyzer output:
-![CBS baseline ideal output](test_results/images/cbs-basic-ideal.jpg)
+![CBS baseline ideal output](images/cbs-basic-ideal.jpg)
 
 
 **Pass criterion:**
@@ -49,12 +49,12 @@ CBS baseline ideal logic analyzer output:
 - The CBS task prints one start/end pair per notification.
 - The CBS task never runs for longer than its configured budget in a single server period.
 
-**Results (referencing `test_results/run_cbs_basic.log`):**
+**Results (referencing `logs/run_cbs_basic.log`):**
 - The log shows all three periodic tasks being admitted at tick 0 and then releasing/finishing regularly.
 - CBS jobs execute repeatedly with consistent start/end prints (`job=1` through `job=12` in the captured segment).
 - CBS budget tracking lines stay within the configured server budget behavior, and no instability is visible.
 
-![CBS baseline actual output](test_results/images/cbs-basic.png)
+![CBS baseline actual output](images/cbs-basic.png)
 
 ### Test 2: System overload (deadline-miss behaviour test)
 **File:** [main_cbs_test_overrun.c](FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/Standard/main_cbs_test_overrun.c)
@@ -78,12 +78,12 @@ This test is meant to stress the CBS implementation, so we should see deadline m
 - The CBS task still prints sensible start/end tick pairs.
 - The system does not deadlock or stop issuing periodic GPIO activity.
 
-**Results (referencing `test_results/run_cbs_overrun.log`):**
+**Results (referencing `logs/run_cbs_overrun.log`):**
 - The system remains running under heavier load, and periodic tasks continue to release/finish.
 - CBS executes long jobs and the kernel logs repeated CBS deadline-drop events (`[drop] task=CBS missed_deadline=...`), which is expected for this stress setup.
 - No deadlock or scheduler collapse is observed in the captured run.
 
-![CBS overload actual output](test_results/images/cbs-overrun.png)
+![CBS overload actual output](images/cbs-overrun.png)
 
 ### Test 3: High system load and dynamically adding more tasks
 **File:** [main_cbs_test_dynamic_multi.c](FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/Standard/main_cbs_test_dynamic_multi.c)
@@ -112,7 +112,7 @@ This is the dynamic admission test. It starts with a large periodic task set, th
 The test should demonstrate that CBS continues to function while new EDF tasks are created after startup. The dispatcher should print creation messages for the later tasks, and the CBS trigger task should continue to notify whichever CBS worker is next in the round-robin order.
 
 Expected logic analyzer output:
-![CBS high-load dynamic expected output](test_results/images/cbs-dynamic-ideal.jpg)
+![CBS high-load dynamic expected output](images/cbs-dynamic-ideal.jpg)
 
 
 **Pass criterion:**
@@ -121,10 +121,10 @@ Expected logic analyzer output:
 - The CBS trigger task continues to notify all four CBS workers over time.
 - The trace output reflects all 14 periodic tasks plus the four CBS tasks without kernel instability.
 
-**Results (referencing `test_results/run_cbs_dynamic_multi.log`):**
+**Results (referencing `logs/run_cbs_dynamic_multi.log`):**
 - Startup matches the updated program: 10 initial periodic tasks and 2 initial CBS tasks.
 - Runtime additions are visible in order: `PERIODIC_10`, `PERIODIC_11`, `PERIODIC_12`, `PERIODIC_13`, then `CBS_2` and `CBS_3`.
 - The dispatcher reports completion and self-deletes, and all four CBS workers (`CBS_0`..`CBS_3`) show round-robin jobs in subsequent output.
 - Periodic release/finish traces continue after dynamic additions, indicating stable operation at high load.
 
-![CBS high-load dynamic actual output](test_results/images/cbs-dynamic-multi.png)
+![CBS high-load dynamic actual output](images/cbs-dynamic-multi.png)

@@ -2,8 +2,8 @@
     {
         "name": "Pico",
         "compilers": {
-            "C": "/home/micha/.pico-sdk/toolchain/14_2_Rel1/bin/arm-none-eabi-gcc",
-            "CXX": "/home/micha/.pico-sdk/toolchain/14_2_Rel1/bin/arm-none-eabi-g++"
+            "C": "${userHome}/.pico-sdk/toolchain/14_2_Rel1/bin/arm-none-eabi-gcc",
+            "CXX": "${userHome}/.pico-sdk/toolchain/14_2_Rel1/bin/arm-none-eabi-g++"
         },
         "environmentVariables": {
             "PATH": "${command:raspberry-pi-pico.getEnvPath};${env:PATH}"

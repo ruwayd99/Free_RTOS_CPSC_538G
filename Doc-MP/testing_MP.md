@@ -50,7 +50,7 @@ This program verifies that the global EDF admission path accepts a schedulable t
 The first three tasks are admitted and continue to run periodically. The final task is rejected because it makes the task set unschedulable under the global EDF admission test.
 
 Logic analyzer output:
-![SMP global admission expected output](test_results/images/smp-global-admission-ideal.jpg)
+![SMP global admission expected output](images/smp-global-admission-ideal.jpg)
 Note that the blue and red stripes indicate timing of job runs & corresponding dips in idle task execution
 
 **Pass criterion:**
@@ -58,12 +58,12 @@ Note that the blue and red stripes indicate timing of job runs & corresponding d
 - `uxTaskGetEDFRejectedCount()` increments for the rejection case.
 - The admitted tasks keep producing periodic GPIO activity without kernel instability.
 
-**Results (from `test_results/run_smp_global_admission.log`):**
+**Results (from `logs/run_smp_global_admission.log`):**
 - The log shows `G_A`, `G_B`, and `G_C` admitted, and `G_REJECT` rejected by global GFB admission.
 - The startup summary reports `admitted=3 rejected=1`.
 - Admitted tasks continue to release and finish periodically for the remainder of the captured output.
 
-![SMP global admission actual output](test_results/images/smp-global-admission.png)
+![SMP global admission actual output](images/smp-global-admission.png)
 
 ---
 
@@ -83,7 +83,7 @@ This test validates the runtime migration and release APIs in global EDF mode. A
 The migration request should succeed and the hinted task should become eligible to run on the new core. Removing the peer task from its core assignment should release it back into the global pool.
 
 Logic analyzer output:
-![SMP global migration expected output](test_results/images/smp-global-migrate-ideal.jpg)
+![SMP global migration expected output](images/smp-global-migrate-ideal.jpg)
 Note again that blue stripes indicate task timing. 
 
 
@@ -92,12 +92,12 @@ Note again that blue stripes indicate task timing.
 - The worker trace eventually shows `G_HINT` on core 1.
 - The remove-from-core operation completes without a crash.
 
-**Results (from `test_results/run_smp_global_migration.log`):**
+**Results (from `logs/run_smp_global_migration.log`):**
 - The controller logs `migrate hinted->core1 result=1`, then worker output later confirms `G_HINT` running on core 1.
 - The controller logs removal of `G_PEER` from scheduling.
 - After removal, only `G_HINT` continues periodic releases/finishes, with no crash observed.
 
-![SMP global migration actual output](test_results/images/smp-global-migrate.png)
+![SMP global migration actual output](images/smp-global-migrate.png)
 
 ## 3. Partitioned EDF Tests
 
@@ -119,7 +119,7 @@ This program validates the partitioned EDF admission path using a fit/reject sce
 The five moderate tasks are admitted and placed across the two cores. The oversized task is rejected because no core has enough remaining capacity.
 
 Logic analyzer expected output:
-![SMP partition fit actual output](test_results/images/smp-partition-fit-ideal.jpg)
+![SMP partition fit actual output](images/smp-partition-fit-ideal.jpg)
 Again, the red/blue/green stripes indicate job timing and how they correspond to idle task execution.
 
 **Pass criterion:**
@@ -127,12 +127,12 @@ Again, the red/blue/green stripes indicate job timing and how they correspond to
 - One task is rejected.
 - The summary print shows 5 admitted and 1 rejected.
 
-**Results (from `test_results/run_smp_partition_fit.log`):**
+**Results (from `logs/run_smp_partition_fit.log`):**
 - The log shows five accepts (`P_U40`, `P_U30A`, `P_U30B`, `P_U25A`, `P_U25B`) and one reject (`P_U80_REJECT`).
 - The printed summary confirms `admitted=5 rejected=1`.
 - Accepted tasks continue periodic release/finish behavior in the captured run.
 
-![SMP partition fit actual output](test_results/images/smp-partition-fit.png)
+![SMP partition fit actual output](images/smp-partition-fit.png)
 
 ---
 
@@ -152,19 +152,19 @@ This test validates the partitioned migration and remove-from-core APIs. It demo
 The first migration should fail because core 0 is already carrying a large task. After `P_A_U70` is removed from its fixed core, the second migration should succeed.
 
 Logic analyzer expected output:
-![SMP partition fit actual output](test_results/images/smp-partition-migrate-ideal.jpg)
+![SMP partition fit actual output](images/smp-partition-migrate-ideal.jpg)
 
 **Pass criterion:**
 - The first migration request returns failure.
 - The controller reports that `P_A_U70` was removed from core assignment.
 - The second migration request returns success.
 
-**Results (from `test_results/run_smp_partition_migrate.log`):**
+**Results (from `logs/run_smp_partition_migrate.log`):**
 - The first migration attempt logs failure as expected: `migrate B->core0 expect fail result=0`.
 - The controller then logs removal of `P_A_U70` from core assignment.
 - The second migration logs success: `migrate B->core0 after remove expect pass result=1`, and worker output then shows `P_B_U40` running on core 0.
 
-![SMP partition migration actual output](test_results/images/smp-partition-migrate.png)
+![SMP partition migration actual output](images/smp-partition-migrate.png)
 
 ## 4. Coverage Summary
 

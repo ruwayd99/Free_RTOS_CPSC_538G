@@ -165,7 +165,7 @@ Serial output
 ```
 
 Logic analzyer expectation
-![SRP dynamic expected output](test_results/images/srp-dynamic-ideal.jpg)
+![SRP dynamic expected output](images/srp-dynamic-ideal.jpg)
 
 
 ### 2.7 Result
@@ -173,7 +173,7 @@ Logic analzyer expectation
 **PASS.** 5 accepts, 1 reject, no drops, no deadlocks. GPIO pins
 10–13 and 18 pulse periodically; pin 19 (OVERLOAD) stays low.
 
-![SRP dynamic actual output](test_results/images/srp-dynamic.png)
+![SRP dynamic actual output](images/srp-dynamic.png)
 
 ---
 
@@ -301,7 +301,7 @@ consumed for stacks. Mode ON: 100 admits, 0 rejects, ~28 KB heap +
 3.8 KB `.bss`, ~66% savings depending on how you account for the
 snapshot buffers.
 
-![SRP 100-task actual output](test_results/images/srp-100.png)
+![SRP 100-task actual output](images/srp-100.png)
 
 ---
 
